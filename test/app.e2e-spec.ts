@@ -26,6 +26,7 @@ describe('rates-service (e2e, DEV_AUTH=true)', () => {
       .expect(200);
     expect(res.body).toMatchObject({
       status: 'ok',
+      appEnv: 'local',
       service: 'rates-service',
       client: 'demo',
       db: 'UP',

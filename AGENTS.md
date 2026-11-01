@@ -17,6 +17,8 @@ TypeScript 6, Node 26. Read `README.md` first.
   - Events: `EventPublisher` / `EventSubscriber` with names from `src/events/catalog.ts` (identical in all backends).
   - Live data to frontends: GraphQL subscriptions (see `src/server-time/` for the pattern).
   - Config: inject `AppConfig`; add new env vars to `env.schema.ts` **and** `.env.example`.
+- **Redis names** (channels, streams, queues) are always prefixed with `APP_ENV` — use the event helpers
+  (`eventChannel`, `eventStream`) and never hard-code a raw name.
 - **Database:** Knex via the `KNEX` token. Schema changes only through new timestamped migrations
   (`npm run migrate:make -- <name>`); never edit a merged migration. Migrations use `import type` only.
 - **Money:** integers in minor units; rates as decimal strings. Never floating point.
