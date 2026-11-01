@@ -3,3 +3,5 @@ process.env.NODE_ENV ??= 'test';
 process.env.DEV_AUTH ??= 'true';
 process.env.DATABASE_URL ??= 'mysql://wallet:wallet@localhost:3306/rates_service';
 process.env.REDIS_URL ??= 'redis://localhost:6379';
+// The JSON access log would flood the test output; set LOG_LEVEL=info to see it.
+process.env.LOG_LEVEL ??= 'silent';
