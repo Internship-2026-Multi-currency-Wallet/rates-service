@@ -223,6 +223,25 @@ schema.graphql   generated GraphQL contract (committed)
 One module per feature (`src/sources/`, `src/aggregation/`, …). Shared files (`app.module.ts`, `schema.graphql`)
 change in small, dedicated PRs.
 
+## Deployment
+
+Every push to `main` (→ `staging`), `client/kvitka-uat` and `client/wisla-uat` runs `.github/workflows/deploy.yml`,
+a thin caller of `ops/.github/workflows/deploy-service.yml`: the image is built in GitHub Actions, pushed to
+`ghcr.io/internship-2026-multi-currency-wallet/rates-service:<env>-<sha>` (and `<env>-latest`), the environment's Dokploy
+application is redeployed, and the job waits until `/health` reports the new commit SHA as `version`.
+The container runs `npm run migrate && node dist/main.js`, so migrations are applied on every deploy.
+
+| Environment  | Branch              | URL                                                               | `CLIENT` | `DEV_AUTH` |
+| ------------ | ------------------- | ----------------------------------------------------------------- | -------- | ---------- |
+| `staging`    | `main`              | <https://staging-rates.wallet.shatori.com/graphql> · `/health`    | `demo`   | `true`     |
+| `kvitka-uat` | `client/kvitka-uat` | <https://kvitka-uat-rates.wallet.shatori.com/graphql> · `/health` | `kvitka` | `false`    |
+| `wisla-uat`  | `client/wisla-uat`  | <https://wisla-uat-rates.wallet.shatori.com/graphql> · `/health`  | `wisla`  | `false`    |
+
+Deployed configuration (set in Dokploy, not in Git): `APP_ENV`, `CLIENT`, `DEV_AUTH`, `DATABASE_URL` (database
+`<env>_rates_service`), `REDIS_URL`, `CORS_ORIGINS` (`https://<env>.wallet.shatori.com`,
+`https://<env>-admin.wallet.shatori.com`), `NODE_OPTIONS`; `APP_VERSION` is baked into the image by CI.
+Details: the `ops` README (_Deployment_).
+
 ## Docker
 
 ```sh
