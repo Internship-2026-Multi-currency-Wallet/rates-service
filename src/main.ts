@@ -15,7 +15,7 @@ async function bootstrap(): Promise<void> {
   const logger = await app.resolve(PinoLogger);
   logger.setContext('Bootstrap');
   logger.info(
-    { version: config.version, port: config.port, devAuth: config.devAuth },
+    { version: config.version, port: config.port },
     `${config.serviceName} ${config.version} listening on :${config.port}`,
   );
 }

@@ -5,7 +5,9 @@ import { AppConfig } from '../config/app-config.js';
 import { ClientSettingsService, loadSettingsFile } from './client-settings.service.js';
 
 describe('ClientSettingsService', () => {
-  const service = new ClientSettingsService(AppConfig.fromEnv({ CLIENT: 'kvitka' }));
+  const service = new ClientSettingsService(
+    AppConfig.fromEnv({ CLIENT: 'kvitka', JWT_SECRET: 'x'.repeat(32) }),
+  );
 
   it('returns typed defaults from config/settings.defaults.yaml', async () => {
     await expect(service.get('auth.phoneRequiredAt')).resolves.toBe('never');

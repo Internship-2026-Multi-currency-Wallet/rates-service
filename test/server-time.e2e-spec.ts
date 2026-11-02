@@ -3,6 +3,7 @@ import type { INestApplication } from '@nestjs/common';
 import { type Client, createClient } from 'graphql-ws';
 import WebSocket from 'ws';
 import { createApp } from './create-app.js';
+import { bearer } from './tokens.js';
 
 function wsClient(url: string, connectionParams?: Record<string, string>): Client {
   return createClient({ url, webSocketImpl: WebSocket, connectionParams, retryAttempts: 0 });
@@ -39,7 +40,7 @@ describe('serverTime subscription (e2e, graphql-ws)', () => {
   let url: string;
 
   beforeAll(async () => {
-    app = await createApp({ DEV_AUTH: 'true' });
+    app = await createApp();
     await app.listen(0);
     const address = (app.getHttpServer() as Server).address() as { port: number };
     url = `ws://127.0.0.1:${address.port}/graphql`;
@@ -49,8 +50,8 @@ describe('serverTime subscription (e2e, graphql-ws)', () => {
     await app.close();
   });
 
-  it('streams the server time every second with dev auth in connection params', async () => {
-    const client = wsClient(url, { Authorization: 'Dev 1:wallet' });
+  it('streams the server time every second with the access token in connection params', async () => {
+    const client = wsClient(url, { Authorization: bearer() });
     try {
       const values = await take(client, 'subscription { serverTime }', 2);
       expect(values).toHaveLength(2);
