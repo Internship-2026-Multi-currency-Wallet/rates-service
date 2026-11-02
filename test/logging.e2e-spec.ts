@@ -5,6 +5,7 @@ import type { App } from 'supertest/types.js';
 import type { EventMeta, SystemPingEvent } from '../src/events/catalog.js';
 import { EventSubscriber } from '../src/events/event-bus.js';
 import { createApp } from './create-app.js';
+import { bearer } from './tokens.js';
 
 describe('request id and diagnostics (e2e)', () => {
   const prefix = 'e2e-logging';
@@ -12,7 +13,7 @@ describe('request id and diagnostics (e2e)', () => {
   let subscriber: EventSubscriber;
 
   beforeAll(async () => {
-    app = await createApp({ DEV_AUTH: 'true', APP_ENV: 'local' });
+    app = await createApp({ APP_ENV: 'local' });
     subscriber = new EventSubscriber(
       new Redis(process.env.REDIS_URL ?? 'redis://localhost:6379'),
       'local',
@@ -47,7 +48,7 @@ describe('request id and diagnostics (e2e)', () => {
     await new Promise((resolve) => setTimeout(resolve, 100));
     await request(app.getHttpServer() as App)
       .post('/diagnostics/ping')
-      .set('Authorization', 'Dev 1:wallet')
+      .set('Authorization', bearer())
       .set('x-request-id', `${prefix}-2`)
       .expect(200, { published: true });
     const [ping, meta] = await received;

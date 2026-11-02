@@ -1,37 +1,27 @@
 import { Module } from '@nestjs/common';
 import { APP_GUARD } from '@nestjs/core';
-import { PinoLogger } from 'nestjs-pino';
-import { AppConfig } from '../config/app-config.js';
+import { JwtModule } from '@nestjs/jwt';
 import { AUTH_STRATEGIES, type AuthStrategy } from './auth-strategy.js';
 import { AuthGuard } from './auth.guard.js';
-import { DevAuthStrategy } from './dev-auth.strategy.js';
+import { JwtAuthStrategy } from './jwt-auth.strategy.js';
 import { MeResolver } from './me.resolver.js';
 import { PermissionGuard } from '../permissions/permission.guard.js';
 
 /**
  * Authentication seam.
  *
- * To add the real JWT login later, implement `AuthStrategy` (e.g. `JwtStrategy`), add it to
- * `providers` and to the `AUTH_STRATEGIES` factory below. Business code keeps using
- * `@CurrentUser()`, `@Public()` and `@RequirePermission()` unchanged.
+ * Callers send the access token issued by wallet-core (`Authorization: Bearer <jwt>`);
+ * `JwtAuthStrategy` verifies it locally. Business code only uses `@CurrentUser()`, `@Public()`
+ * and `@RequirePermission()`.
  */
 @Module({
+  imports: [JwtModule.register({})],
   providers: [
-    DevAuthStrategy,
+    JwtAuthStrategy,
     {
       provide: AUTH_STRATEGIES,
-      inject: [AppConfig, DevAuthStrategy, PinoLogger],
-      useFactory: (config: AppConfig, dev: DevAuthStrategy, logger: PinoLogger): AuthStrategy[] => {
-        const strategies: AuthStrategy[] = [];
-        if (config.devAuth) {
-          if (config.isProduction) {
-            logger.setContext('AuthModule');
-            logger.warn('DEV_AUTH is enabled in production mode');
-          }
-          strategies.push(dev);
-        }
-        return strategies;
-      },
+      inject: [JwtAuthStrategy],
+      useFactory: (jwt: JwtAuthStrategy): AuthStrategy[] => [jwt],
     },
     // Order matters: authenticate first, then check permissions.
     { provide: APP_GUARD, useClass: AuthGuard },

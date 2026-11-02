@@ -12,49 +12,26 @@ export type ClientCode = (typeof KNOWN_CLIENTS)[number];
 export const APP_ENVS = ['local', 'staging', 'kvitka-uat', 'wisla-uat'] as const;
 export type AppEnv = (typeof APP_ENVS)[number];
 
-/** Dev auth is allowed only outside client UAT environments. */
-export function isDevAuthAllowed(appEnv: AppEnv): boolean {
-  return !appEnv.endsWith('-uat');
-}
-
-const booleanFromString = z
-  .enum(['true', 'false', '1', '0'])
-  .default('false')
-  .transform((value) => value === 'true' || value === '1');
-
 /**
  * Environment variables of the service. Validated once at startup:
  * a missing or invalid value stops the process with a clear message.
  * Keep `.env.example` in sync with this schema.
  */
-export const envSchema = z
-  .object({
-    NODE_ENV: z.enum(['development', 'test', 'production']).default('development'),
-    APP_ENV: z.enum(APP_ENVS).default('local'),
-    PORT: z.coerce.number().int().positive().default(3001),
-    DATABASE_URL: z.url().default('mysql://wallet:wallet@localhost:3306/rates_service'),
-    REDIS_URL: z.url().default('redis://localhost:6379'),
-    CLIENT: z.enum(KNOWN_CLIENTS).default('demo'),
-    DEV_AUTH: booleanFromString,
-    CORS_ORIGINS: z.string().default('http://localhost:5173,http://localhost:5174'),
-    APP_VERSION: z.string().optional(),
-    LOG_LEVEL: z.enum(LOG_LEVELS).default('info'),
-    // Placeholders for the real JWT strategy (not used yet).
-    JWT_ISSUER: z.string().default('wallet-core'),
-    JWT_PUBLIC_KEY: z.string().optional(),
-    JWT_PRIVATE_KEY: z.string().optional(),
-    JWT_ACCESS_TTL: z.string().default('15m'),
-    JWT_REFRESH_TTL: z.string().default('30d'),
-  })
-  .superRefine((env, ctx) => {
-    if (env.DEV_AUTH && !isDevAuthAllowed(env.APP_ENV)) {
-      ctx.addIssue({
-        code: 'custom',
-        path: ['DEV_AUTH'],
-        message: `DEV_AUTH=true is not allowed in client environment "${env.APP_ENV}" (only local and staging)`,
-      });
-    }
-  });
+export const envSchema = z.object({
+  NODE_ENV: z.enum(['development', 'test', 'production']).default('development'),
+  APP_ENV: z.enum(APP_ENVS).default('local'),
+  PORT: z.coerce.number().int().positive().default(3001),
+  DATABASE_URL: z.url().default('mysql://wallet:wallet@localhost:3306/rates_service'),
+  REDIS_URL: z.url().default('redis://localhost:6379'),
+  CLIENT: z.enum(KNOWN_CLIENTS).default('demo'),
+  CORS_ORIGINS: z.string().default('http://localhost:5173,http://localhost:5174'),
+  APP_VERSION: z.string().optional(),
+  LOG_LEVEL: z.enum(LOG_LEVELS).default('info'),
+  JWT_ISSUER: z.string().min(1).default('wallet-core'),
+  JWT_SECRET: z
+    .string({ error: 'is required (the HS256 secret shared with wallet-core)' })
+    .min(32, 'must be at least 32 characters'),
+});
 
 export type Env = z.infer<typeof envSchema>;
 
