@@ -16,7 +16,7 @@ export function saveQuote(quote: RateQuote): void {
 export function getFreshQuote(
   base: Currency,
   quote: Currency,
-  maxAgeSeconds = 30,
+  maxAgeSeconds = 60,
 ): RateQuote | undefined {
   const cached = cache[base + quote];
   if (!cached) {
