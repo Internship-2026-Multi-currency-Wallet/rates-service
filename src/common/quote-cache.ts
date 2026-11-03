@@ -7,7 +7,7 @@ export interface RateQuote {
   fetchedAt: Date;
 }
 
-const cache: Record<string, RateQuote> = {};
+const cache: Record<string, RateQuote> = Object.create(null);
 
 export function saveQuote(quote: RateQuote): void {
   cache[quote.base + quote.quote] = quote;
