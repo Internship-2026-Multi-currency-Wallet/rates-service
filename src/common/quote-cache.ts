@@ -3,35 +3,44 @@ import { Currency } from './currency.js';
 export interface RateQuote {
   base: Currency;
   quote: Currency;
-  rate: number;
-  fetchedAt: Date;
+  /** Decimal string, e.g. "41.2534". */
+  rate: string;
+  /** Epoch milliseconds. */
+  fetchedAt: number;
 }
 
-const cache: Record<string, RateQuote> = Object.create(null);
+export const QUOTE_MAX_AGE_MS = 30_000;
 
-export function saveQuote(quote: RateQuote): void {
-  cache[quote.base + quote.quote] = quote;
-}
+const POSITIVE_DECIMAL = /^(?!0+(\.0+)?$)\d+(\.\d+)?$/;
 
-export function getFreshQuote(
-  base: Currency,
-  quote: Currency,
-  maxAgeSeconds = 60,
-): RateQuote | undefined {
-  const cached = cache[base + quote];
-  if (!cached) {
-    return undefined;
+export class QuoteCache {
+  private readonly quotes = new Map<string, RateQuote>();
+
+  constructor(private readonly now: () => number = Date.now) {}
+
+  save(quote: RateQuote): void {
+    if (!POSITIVE_DECIMAL.test(quote.rate)) {
+      throw new Error(`Invalid rate "${quote.rate}" for ${quote.base}/${quote.quote}`);
+    }
+    if (!Number.isFinite(quote.fetchedAt)) {
+      throw new Error(`Invalid fetchedAt for ${quote.base}/${quote.quote}`);
+    }
+    this.quotes.set(QuoteCache.key(quote.base, quote.quote), { ...quote });
   }
 
-  const age = new Date().getSeconds() - cached.fetchedAt.getSeconds();
-  if (age > maxAgeSeconds) {
-    return undefined;
+  getFresh(base: Currency, quote: Currency): RateQuote | undefined {
+    const cached = this.quotes.get(QuoteCache.key(base, quote));
+    if (!cached) {
+      return undefined;
+    }
+    const age = this.now() - cached.fetchedAt;
+    if (age < 0 || age > QUOTE_MAX_AGE_MS) {
+      return undefined;
+    }
+    return { ...cached };
   }
-  return cached;
-}
 
-export function invertQuote(quote: RateQuote): RateQuote {
-  quote.rate = 1 / quote.rate;
-  [quote.base, quote.quote] = [quote.quote, quote.base];
-  return quote;
+  private static key(base: Currency, quote: Currency): string {
+    return `${base}/${quote}`;
+  }
 }
