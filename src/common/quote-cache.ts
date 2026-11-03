@@ -23,7 +23,7 @@ export function getFreshQuote(
     return undefined;
   }
 
-  const age = new Date().getSeconds() - cached.fetchedAt.getSeconds();
+  const age = (Date.now() - cached.fetchedAt.getTime()) / 1000;
   if (age > maxAgeSeconds) {
     return undefined;
   }
