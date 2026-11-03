@@ -10,5 +10,5 @@ export function convertAmount(amount: number, from: Currency, to: Currency, rate
 }
 
 export function applyFee(amount: number, feePercent: number): number {
-  return amount - amount * (feePercent / 100);
+  return amount - Math.round(amount * (feePercent / 100));
 }
