@@ -13,7 +13,7 @@ export interface AuthRequest {
  * - Return `null` when the request does not carry credentials this strategy understands
  *   (the guard then tries the next strategy).
  * - Throw `UnauthorizedException` when the credentials are meant for this strategy but are invalid
- *   (expired token, bad signature, malformed dev header).
+ *   (expired token, bad signature).
  *
  * Register strategies in `AuthModule` under the `AUTH_STRATEGIES` token.
  * Business code never depends on a concrete strategy.

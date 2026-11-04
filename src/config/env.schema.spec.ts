@@ -1,5 +1,5 @@
 import { AppConfig } from './app-config.js';
-import { validateEnv } from './env.schema.js';
+import { LOCAL_JWT_SECRET, validateEnv } from './env.schema.js';
 
 const required = { JWT_SECRET: 'x'.repeat(32) };
 
@@ -32,9 +32,23 @@ describe('validateEnv', () => {
     expect(() => validateEnv({ ...required, APP_ENV: 'production' })).toThrow(/APP_ENV/);
   });
 
-  it('requires JWT_SECRET', () => {
-    expect(() => validateEnv({})).toThrow(/JWT_SECRET: is required/);
-    expect(() => validateEnv({ JWT_SECRET: '' })).toThrow(/JWT_SECRET: is required/);
+  it('falls back to the local-only JWT_SECRET outside production', () => {
+    expect(validateEnv({}).JWT_SECRET).toBe(LOCAL_JWT_SECRET);
+    expect(validateEnv({ NODE_ENV: 'test', JWT_SECRET: '' }).JWT_SECRET).toBe(LOCAL_JWT_SECRET);
+  });
+
+  it('keeps an explicit JWT_SECRET', () => {
+    expect(validateEnv(required).JWT_SECRET).toBe(required.JWT_SECRET);
+  });
+
+  it('requires JWT_SECRET in production', () => {
+    expect(() => validateEnv({ NODE_ENV: 'production' })).toThrow(/JWT_SECRET: is required/);
+    expect(() => validateEnv({ NODE_ENV: 'production', JWT_SECRET: '' })).toThrow(
+      /JWT_SECRET: is required/,
+    );
+    expect(validateEnv({ ...required, NODE_ENV: 'production' }).JWT_SECRET).toBe(
+      required.JWT_SECRET,
+    );
   });
 
   it('refuses a JWT_SECRET shorter than 32 characters', () => {

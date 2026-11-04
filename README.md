@@ -5,7 +5,7 @@ The exchange-rate service of the white-label multi-currency wallet: adapters for
 live rate stream (`rate.tick` on Redis, GraphQL subscriptions for the frontends).
 
 Today this repository is a **skeleton**: a NestJS + GraphQL service with health checks, an example GraphQL
-subscription and the _seams_ (dev auth, permissions, settings, events) that let you build features before
+subscription and the _seams_ (auth, permissions, settings, events) that let you build features before
 the real parts exist. The features themselves are your tasks.
 
 ## Stack
@@ -23,8 +23,13 @@ npm run infra:up              # MySQL (all databases) + Redis only — no applic
 npm install
 cp .env.example .env          # optional: the defaults match the ops stack
 npm run migrate
-DEV_AUTH=true npm run start:dev
+npm run start:dev
 ```
+
+Without a `.env` the service still starts: every variable has a local default. That includes `JWT_SECRET`, which
+falls back to the **local-only learning secret** `local-only-jwt-secret-change-me-0123456789` (the same value as in
+`.env.example`). wallet-core must sign tokens with the same secret, or every request is 401. The fallback applies only
+when `NODE_ENV` is not `production`; in production `JWT_SECRET` is required and the service refuses to start without it.
 
 - GraphQL: <http://localhost:3001/graphql> (Apollo Sandbox in the browser)
 - Health: <http://localhost:3001/health>
@@ -45,9 +50,13 @@ while you run it from source (same port).
 needs little memory for the infrastructure; images are built one at a time — give Docker at least 4 GiB if you
 run the whole stack. Details: the `ops` README.
 
+Every non-public request needs an access token from wallet-core. To try the API locally, sign one yourself with
+the local-only secret (it is accepted only while the service runs with that secret):
+
 ```sh
+TOKEN=$(node -e "console.log(require('jsonwebtoken').sign({ sub: '3c7e1a9b-5d2f-4b8e-9a6c-1f0d2e3b4a5c', permissions: ['wallet'] }, 'local-only-jwt-secret-change-me-0123456789', { issuer: 'wallet-core', expiresIn: '15m' }))")
 curl -s localhost:3001/graphql -H 'content-type: application/json' \
-  -H 'Authorization: Dev 1:wallet' -d '{"query":"{ me { id permissions } }"}'
+  -H "Authorization: Bearer $TOKEN" -d '{"query":"{ me { id permissions } }"}'
 ```
 
 ## Scripts
@@ -71,19 +80,19 @@ curl -s localhost:3001/graphql -H 'content-type: application/json' \
 Validated at startup (`src/config/env.schema.ts`); an invalid value stops the service with a clear message.
 See `.env.example`.
 
-| Variable                       | Default                                              | Meaning                                                                                              |
-| ------------------------------ | ---------------------------------------------------- | ---------------------------------------------------------------------------------------------------- |
-| `PORT`                         | `3001`                                               | HTTP port                                                                                            |
-| `NODE_ENV`                     | `development`                                        | `production` disables writing `schema.graphql`                                                       |
-| `APP_ENV`                      | `local`                                              | Environment: `local`, `staging`, `kvitka-uat`, `wisla-uat`. Prefix of all Redis keys                 |
-| `DATABASE_URL`                 | `mysql://wallet:wallet@localhost:3306/rates_service` | MySQL database of this service                                                                       |
-| `REDIS_URL`                    | `redis://localhost:6379`                             | Redis for events                                                                                     |
-| `CLIENT`                       | `demo`                                               | Client this deployment serves: `demo`, `kvitka`, `wisla`                                             |
-| `DEV_AUTH`                     | `false`                                              | Accept `Authorization: Dev …` headers (see below). Refused at startup when `APP_ENV` is a client UAT |
-| `CORS_ORIGINS`                 | `http://localhost:5173,http://localhost:5174`        | Allowed browser origins                                                                              |
-| `APP_VERSION`                  | from `package.json`                                  | Version reported by `health`                                                                         |
-| `LOG_LEVEL`                    | `info`                                               | Log level: `fatal`, `error`, `warn`, `info`, `debug`, `trace`, `silent`                              |
-| `JWT_ISSUER`, `JWT_PUBLIC_KEY` | —                                                    | Placeholders: tokens are issued by wallet-core, this service will only verify them (not used yet)    |
+| Variable       | Default                                                          | Meaning                                                                              |
+| -------------- | ---------------------------------------------------------------- | ------------------------------------------------------------------------------------ |
+| `PORT`         | `3001`                                                           | HTTP port                                                                            |
+| `NODE_ENV`     | `development`                                                    | `production` disables writing `schema.graphql`                                       |
+| `APP_ENV`      | `local`                                                          | Environment: `local`, `staging`, `kvitka-uat`, `wisla-uat`. Prefix of all Redis keys |
+| `DATABASE_URL` | `mysql://wallet:wallet@localhost:3306/rates_service`             | MySQL database of this service                                                       |
+| `REDIS_URL`    | `redis://localhost:6379`                                         | Redis for events                                                                     |
+| `CLIENT`       | `demo`                                                           | Client this deployment serves: `demo`, `kvitka`, `wisla`                             |
+| `CORS_ORIGINS` | `http://localhost:5173,http://localhost:5174`                    | Allowed browser origins                                                              |
+| `APP_VERSION`  | from `package.json`                                              | Version reported by `health`                                                         |
+| `LOG_LEVEL`    | `info`                                                           | Log level: `fatal`, `error`, `warn`, `info`, `debug`, `trace`, `silent`              |
+| `JWT_ISSUER`   | `wallet-core`                                                    | Expected issuer of the access tokens                                                 |
+| `JWT_SECRET`   | `local-only-jwt-secret-change-me-0123456789` (not in production) | HS256 secret shared with wallet-core. Required when `NODE_ENV=production`            |
 
 ## GraphQL contract
 
@@ -108,7 +117,7 @@ import { createClient } from 'graphql-ws';
 
 const client = createClient({
   url: 'ws://localhost:3001/graphql',
-  connectionParams: { Authorization: 'Dev 1:wallet' },
+  connectionParams: { Authorization: `Bearer ${accessToken}` },
 });
 client.subscribe(
   { query: 'subscription { serverTime }' },
@@ -150,23 +159,23 @@ this.logger.error({ err, conversionId }, 'conversion failed'); // pass errors as
 
 Seams let you write business logic now and swap the stand-in for the real thing later without touching that logic.
 
-### Dev auth — `src/auth`
+### Auth — `src/auth`
 
 A global `AuthGuard` asks the registered `AuthStrategy` list who the caller is. Every endpoint requires
 authentication unless it is marked `@Public()`.
 
-With `DEV_AUTH=true` the `DevAuthStrategy` accepts:
+Callers send the access token issued by wallet-core:
 
 ```
-Authorization: Dev <userId>:<perm1,perm2>
-Authorization: Dev 1:wallet
-Authorization: Dev 100:bo:users,bo:users:modify
+Authorization: Bearer <access token>
 ```
 
-It works for HTTP, GraphQL queries/mutations and GraphQL subscriptions (send `{ "Authorization": "Dev 1:wallet" }`
-as graphql-ws `connectionParams`). With `DEV_AUTH=false` and no real strategy registered, every non-public request is **401**.
+`JwtAuthStrategy` verifies it locally, without calling wallet-core: the HS256 signature with `JWT_SECRET` (the same
+secret as in wallet-core), the issuer (`JWT_ISSUER`) and the expiry. The user comes from the token: `sub` (UUID) is
+`user.id`, the `permissions` claim is `user.permissions`. A missing, invalid or expired token → **401**.
 
-`DEV_AUTH=true` is allowed only with `APP_ENV=local` or `staging`; in a client UAT (`*-uat`) the service refuses to start.
+It works for HTTP, GraphQL queries/mutations and GraphQL subscriptions (send `{ "Authorization": "Bearer <token>" }`
+as graphql-ws `connectionParams`). The old `Authorization: Dev …` header is no longer accepted.
 
 ```ts
 @Query(() => Balance)
@@ -177,8 +186,8 @@ balance(@CurrentUser() user: AuthUser) { /* user.id, user.permissions */ }
 publicSettings() { ... }
 ```
 
-**Adding real auth later:** implement `AuthStrategy` (`src/auth/auth-strategy.ts`) that verifies wallet-core's JWT
-with the public key (no call to wallet-core), register it in `AuthModule` under `AUTH_STRATEGIES`. Nothing else changes.
+**Another way to authenticate** (e.g. service-to-service calls): implement `AuthStrategy`
+(`src/auth/auth-strategy.ts`) and register it in `AuthModule` under `AUTH_STRATEGIES`. Business code does not change.
 
 ### Permissions — `src/permissions`
 
@@ -188,8 +197,8 @@ with the public key (no call to wallet-core), register it in `AuthModule` under 
 blockUser(...) { ... }
 ```
 
-All listed permissions are required (class-level or method-level); missing → **403**. In dev mode you choose the
-permissions in the header, e.g. `Dev 100:bo:users,bo:users:modify`.
+All listed permissions are required (class-level or method-level); missing → **403**. The permissions come
+from the `permissions` claim of the access token.
 
 ### Client settings — `src/settings`
 
@@ -236,7 +245,7 @@ name (e.g. a stream consumer) use `eventStream(appConfig.appEnv, 'conversion.com
 
 ```
 src/
-  auth/          dev auth seam: AuthGuard, AuthStrategy, @CurrentUser, @Public, `me`
+  auth/          JWT auth: AuthGuard, JwtAuthStrategy, @CurrentUser, @Public, `me`
   permissions/   @RequirePermission + guard
   settings/      ClientSettingsService (defaults from config/settings.defaults.yaml)
   events/        event catalog + publisher/subscriber
@@ -261,13 +270,14 @@ a thin caller of `ops/.github/workflows/deploy-service.yml`: the image is built 
 application is redeployed, and the job waits until `/health` reports the new commit SHA as `version`.
 The container runs `npm run migrate && node dist/main.js`, so migrations are applied on every deploy.
 
-| Environment  | Branch              | URL                                                               | `CLIENT` | `DEV_AUTH` |
-| ------------ | ------------------- | ----------------------------------------------------------------- | -------- | ---------- |
-| `staging`    | `main`              | <https://staging-rates.wallet.shatori.com/graphql> · `/health`    | `demo`   | `true`     |
-| `kvitka-uat` | `client/kvitka-uat` | <https://kvitka-uat-rates.wallet.shatori.com/graphql> · `/health` | `kvitka` | `false`    |
-| `wisla-uat`  | `client/wisla-uat`  | <https://wisla-uat-rates.wallet.shatori.com/graphql> · `/health`  | `wisla`  | `false`    |
+| Environment  | Branch              | URL                                                               | `CLIENT` |
+| ------------ | ------------------- | ----------------------------------------------------------------- | -------- |
+| `staging`    | `main`              | <https://staging-rates.wallet.shatori.com/graphql> · `/health`    | `demo`   |
+| `kvitka-uat` | `client/kvitka-uat` | <https://kvitka-uat-rates.wallet.shatori.com/graphql> · `/health` | `kvitka` |
+| `wisla-uat`  | `client/wisla-uat`  | <https://wisla-uat-rates.wallet.shatori.com/graphql> · `/health`  | `wisla`  |
 
-Deployed configuration (set in Dokploy, not in Git): `APP_ENV`, `CLIENT`, `DEV_AUTH`, `DATABASE_URL` (database
+Deployed configuration (set in Dokploy, not in Git): `APP_ENV`, `CLIENT`, `JWT_SECRET` (the same value in
+wallet-core, rates-service and treasury-service), `DATABASE_URL` (database
 `<env>_rates_service`), `REDIS_URL`, `CORS_ORIGINS` (`https://<env>.wallet.shatori.com`,
 `https://<env>-admin.wallet.shatori.com`), `NODE_OPTIONS`; `APP_VERSION` is baked into the image by CI.
 Details: the `ops` README (_Deployment_).

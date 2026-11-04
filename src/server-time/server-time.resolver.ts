@@ -5,7 +5,7 @@ export const SERVER_TIME_PERIOD_MS = 1000;
 
 /**
  * Example subscription proving GraphQL over websocket (graphql-ws) works end to end,
- * including dev auth via connection params. Live rates (`rateUpdated`) will follow the same pattern.
+ * including auth via connection params. Live rates (`rateUpdated`) will follow the same pattern.
  */
 @Resolver()
 export class ServerTimeResolver {
