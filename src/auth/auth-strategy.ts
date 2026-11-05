@@ -8,15 +8,8 @@ export interface AuthRequest {
 }
 
 /**
- * A way to turn request credentials into an `AuthUser`.
- *
- * - Return `null` when the request does not carry credentials this strategy understands
- *   (the guard then tries the next strategy).
- * - Throw `UnauthorizedException` when the credentials are meant for this strategy but are invalid
- *   (expired token, bad signature, malformed dev header).
- *
- * Register strategies in `AuthModule` under the `AUTH_STRATEGIES` token.
- * Business code never depends on a concrete strategy.
+ * Unsupported credentials return null to allow another strategy; invalid credentials must throw
+ * to prevent authentication fallback.
  */
 export interface AuthStrategy {
   readonly name: string;
