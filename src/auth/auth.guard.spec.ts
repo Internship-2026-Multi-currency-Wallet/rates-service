@@ -9,6 +9,7 @@ import { AuthGuard } from './auth.guard.js';
 import { JwtAuthStrategy } from './jwt-auth.strategy.js';
 import { Public } from './public.decorator.js';
 import type { RequestLike } from './request-context.js';
+import { UserKind } from './user-kind.js';
 
 class TestController {
   @Public()
@@ -45,7 +46,7 @@ describe('AuthGuard', () => {
 
   const token = (expiresIn = 900): string =>
     jwtService.sign(
-      { sub: USER_ID, permissions: ['wallet'] },
+      { sub: USER_ID, aud: 'wallet', permissions: ['wallet'] },
       { secret: SECRET, algorithm: 'HS256', issuer: 'wallet-core', expiresIn },
     );
   const bearer = (value: string): RequestLike => ({
@@ -56,7 +57,12 @@ describe('AuthGuard', () => {
     it('authenticates an access token and stores the user on the request', async () => {
       const request = bearer(token());
       await expect(guard.canActivate(context('closed', request, transport))).resolves.toBe(true);
-      expect(request.user).toEqual({ id: USER_ID, permissions: ['wallet'], strategy: 'jwt' });
+      expect(request.user).toEqual({
+        id: USER_ID,
+        kind: UserKind.CLIENT,
+        permissions: ['wallet'],
+        strategy: 'jwt',
+      });
     });
 
     it('rejects requests without a token', async () => {
@@ -102,7 +108,9 @@ describe('AuthGuard', () => {
     const other: AuthStrategy = {
       name: 'other',
       authenticate: ({ authorization }) =>
-        authorization === 'Other x' ? { id: 'o1', permissions: [], strategy: 'other' } : null,
+        authorization === 'Other x'
+          ? { id: 'o1', kind: UserKind.CLIENT, permissions: [], strategy: 'other' }
+          : null,
     };
     const chained = new AuthGuard(reflector, [jwt, other]);
 
