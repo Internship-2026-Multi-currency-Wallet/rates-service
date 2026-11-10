@@ -187,7 +187,8 @@ handbook's `metrics.md`).
   every new one would be a new time series. Unparsable GraphQL, requests that matched no route and anything past the
   cap of 100 distinct values go into one bucket, `(unknown)`.
 - **Websocket operations**: they add to `graphql_errors_total` but not to `http_requests_total`. Errors raised before
-  execution (parse, validation) are `GRAPHQL_VALIDATION_FAILED` under `(unknown)`, as over HTTP.
+  execution (parse and validation) are all `GRAPHQL_VALIDATION_FAILED` under `(unknown)`; over HTTP a parse error is
+  `GRAPHQL_PARSE_FAILED` instead.
 - **Adding a metric**: inject `Metrics` and create it once, in the constructor or factory, with bounded labels only:
 
 ```ts
