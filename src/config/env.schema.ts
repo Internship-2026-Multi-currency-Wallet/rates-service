@@ -33,6 +33,9 @@ export const envSchema = z
     LOG_LEVEL: z.enum(LOG_LEVELS).default('info'),
     JWT_ISSUER: z.string().min(1).default('wallet-core'),
     JWT_SECRET: z.string().min(32, 'must be at least 32 characters').optional(),
+    THROTTLE_TTL_SECONDS: z.coerce.number().int().positive().default(60),
+    THROTTLE_LIMIT_ANONYMOUS: z.coerce.number().int().positive().default(120),
+    THROTTLE_LIMIT_USER: z.coerce.number().int().positive().default(600),
   })
   .transform((env, ctx) => {
     if (env.JWT_SECRET === undefined && env.NODE_ENV === 'production') {

@@ -14,6 +14,7 @@ import { LoggingModule } from './logging/logging.module.js';
 import { RedisModule } from './redis/redis.module.js';
 import { ServerTimeModule } from './server-time/server-time.module.js';
 import { ClientSettingsModule } from './settings/client-settings.module.js';
+import { ThrottlingModule } from './throttling/throttling.module.js';
 
 /**
  * Root module. Shared file: change it only in small, dedicated PRs.
@@ -34,6 +35,8 @@ import { ClientSettingsModule } from './settings/client-settings.module.js';
     }),
     // Seams
     AuthModule,
+    // After AuthModule: global guards run in module order, and the throttler needs req.user.
+    ThrottlingModule,
     ClientSettingsModule,
     // Features
     HealthModule,
