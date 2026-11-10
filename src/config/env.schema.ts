@@ -25,6 +25,8 @@ export const envSchema = z
     NODE_ENV: z.enum(['development', 'test', 'production']).default('development'),
     APP_ENV: z.enum(APP_ENVS).default('local'),
     PORT: z.coerce.number().int().positive().default(3001),
+    METRICS_PORT: z.coerce.number().int().min(0).max(65535).default(9464),
+    METRICS_HOST: z.string().min(1).default('127.0.0.1'),
     DATABASE_URL: z.url().default('mysql://wallet:wallet@localhost:3306/rates_service'),
     REDIS_URL: z.url().default('redis://localhost:6379'),
     CLIENT: z.enum(KNOWN_CLIENTS).default('demo'),
@@ -40,6 +42,22 @@ export const envSchema = z
         code: 'custom',
         path: ['JWT_SECRET'],
         message: 'is required in production (the HS256 secret shared with wallet-core)',
+      });
+      return z.NEVER;
+    }
+    if (env.METRICS_PORT === 0 && env.NODE_ENV !== 'test') {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['METRICS_PORT'],
+        message: 'must be between 1 and 65535 (0 is only allowed when NODE_ENV=test)',
+      });
+      return z.NEVER;
+    }
+    if (env.METRICS_PORT === env.PORT) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['METRICS_PORT'],
+        message: 'must differ from PORT: /metrics must never be served on the public app port',
       });
       return z.NEVER;
     }

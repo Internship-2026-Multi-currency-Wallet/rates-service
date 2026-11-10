@@ -60,6 +60,18 @@ describe('validateEnv', () => {
   it('no longer knows DEV_AUTH', () => {
     expect(validateEnv({ ...required, DEV_AUTH: 'true' })).not.toHaveProperty('DEV_AUTH');
   });
+  it('allows METRICS_PORT=0 only in tests', () => {
+    expect(validateEnv({ ...required, NODE_ENV: 'test', METRICS_PORT: '0' }).METRICS_PORT).toBe(0);
+    expect(() => validateEnv({ ...required, NODE_ENV: 'production', METRICS_PORT: '0' })).toThrow(
+      /METRICS_PORT/,
+    );
+    expect(() => validateEnv({ ...required, METRICS_PORT: '0' })).toThrow(/METRICS_PORT/);
+  });
+
+  it('refuses a METRICS_PORT equal to PORT', () => {
+    expect(validateEnv(required).METRICS_PORT).toBe(9464);
+    expect(() => validateEnv({ ...required, PORT: '9464' })).toThrow(/METRICS_PORT/);
+  });
 });
 
 describe('AppConfig', () => {

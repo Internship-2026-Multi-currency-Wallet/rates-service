@@ -3,7 +3,9 @@ import { Global, Inject, Module, type OnApplicationShutdown } from '@nestjs/comm
 import type { Redis } from 'ioredis';
 import { PinoLogger } from 'nestjs-pino';
 import { AppConfig } from '../config/app-config.js';
+import { Metrics } from '../metrics/metrics.js';
 import { REDIS } from '../redis/redis.module.js';
+import type { RateTickEvent } from './catalog.js';
 import { type EventContext, EventPublisher, EventSubscriber } from './event-bus.js';
 
 /**
@@ -35,9 +37,31 @@ export function loggingEventContext(logger: PinoLogger, service: string): EventC
   providers: [
     {
       provide: EventPublisher,
-      inject: [REDIS, AppConfig, PinoLogger],
-      useFactory: (redis: Redis, config: AppConfig, logger: PinoLogger) =>
-        new EventPublisher(redis, config.appEnv, loggingEventContext(logger, config.serviceName)),
+      inject: [REDIS, AppConfig, PinoLogger, Metrics],
+      useFactory: (redis: Redis, config: AppConfig, logger: PinoLogger, metrics: Metrics) => {
+        const published = metrics.counter({
+          name: 'events_published_total',
+          help: 'Events published, by event type',
+          labelNames: ['type'],
+        });
+        const ticks = metrics.counter({
+          name: 'rate_ticks_published_total',
+          help: 'Rate ticks published, by currency pair',
+          labelNames: ['pair'],
+        });
+        return new EventPublisher(
+          redis,
+          config.appEnv,
+          loggingEventContext(logger, config.serviceName),
+          (name, payload) => {
+            published.inc({ type: name });
+            if (name === 'rate.tick') {
+              const tick = payload as RateTickEvent;
+              ticks.inc({ pair: `${tick.base}/${tick.quote}` });
+            }
+          },
+        );
+      },
     },
     {
       provide: EventSubscriber,
