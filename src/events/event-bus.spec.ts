@@ -176,7 +176,7 @@ describe('EventSubscriber', () => {
     expect(metas).toEqual([{ requestId: 'req-42' }]);
   });
 
-  it('reports each received event once per message, whatever the number of handlers', async () => {
+  it('reports each received message once, decodable or not, whatever the number of handlers', async () => {
     const connection = fakeConnection();
     const onReceived = jest.fn();
     const subscriber = new EventSubscriber(
@@ -193,8 +193,9 @@ describe('EventSubscriber', () => {
     connection.emit('message', 'staging:rate.tick', 'not json');
     connection.emit('message', 'local:rate.tick', JSON.stringify(tick));
     await new Promise((resolve) => setImmediate(resolve));
-    expect(onReceived).toHaveBeenCalledTimes(1);
-    expect(onReceived).toHaveBeenCalledWith('rate.tick');
+    expect(onReceived).toHaveBeenCalledTimes(2);
+    expect(onReceived).toHaveBeenNthCalledWith(1, 'rate.tick');
+    expect(onReceived).toHaveBeenNthCalledWith(2, 'rate.tick');
   });
 
   it('reports bad messages and failing handlers to onError', async () => {

@@ -181,6 +181,7 @@ export class EventSubscriber {
       const handlers = this.handlers.get(channel);
       const name = this.names.get(channel);
       if (!handlers || !name) return;
+      this.onReceived(name);
       let envelope: PubSubEnvelope;
       try {
         envelope = decodePubSubMessage(message);
@@ -188,7 +189,6 @@ export class EventSubscriber {
         this.onError(error, channel, name);
         return;
       }
-      this.onReceived(name);
       for (const handler of handlers) {
         void this.context.run(envelope.meta, () =>
           Promise.resolve()
