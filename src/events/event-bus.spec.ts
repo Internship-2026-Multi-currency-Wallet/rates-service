@@ -209,6 +209,8 @@ describe('EventSubscriber', () => {
     connection.emit('message', 'staging:rate.tick', JSON.stringify(tick));
     await new Promise((resolve) => setImmediate(resolve));
     expect(onError).toHaveBeenCalledTimes(2);
+    expect(onError).toHaveBeenNthCalledWith(1, expect.any(Error), 'staging:rate.tick', 'rate.tick');
+    expect(onError).toHaveBeenNthCalledWith(2, expect.any(Error), 'staging:rate.tick', 'rate.tick');
   });
 });
 

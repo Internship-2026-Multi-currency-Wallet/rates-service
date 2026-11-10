@@ -3,9 +3,11 @@ import type { AddressInfo } from 'node:net';
 import { createClient } from 'graphql-ws';
 import request from 'supertest';
 import type { App } from 'supertest/types.js';
+import type { Redis } from 'ioredis';
 import WebSocket from 'ws';
-import { EventPublisher } from '../src/events/event-bus.js';
+import { eventChannel, EventPublisher } from '../src/events/event-bus.js';
 import { MetricsServer } from '../src/metrics/metrics-server.js';
+import { REDIS } from '../src/redis/redis.module.js';
 import { createApp } from './create-app.js';
 import { bearer } from './tokens.js';
 
@@ -201,6 +203,18 @@ describe('metrics (e2e)', () => {
     expect(valueOf(after, 'events_published_total', { type: 'rate.tick' })).toBe(
       valueOf(before, 'events_published_total', { type: 'rate.tick' }) + 1,
     );
+  });
+
+  it('counts a received event that cannot be decoded as failed', async () => {
+    const labels = { type: 'system.ping' };
+    const before = valueOf(await scrape(), 'events_failed_total', labels);
+    await app.get<Redis>(REDIS).publish(eventChannel('local', 'system.ping'), 'not json');
+    let failed = before;
+    for (let i = 0; i < 50 && failed === before; i++) {
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      failed = valueOf(await scrape(), 'events_failed_total', labels);
+    }
+    expect(failed).toBe(before + 1);
   });
 
   it('counts a REST route under its pattern', async () => {

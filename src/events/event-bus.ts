@@ -133,7 +133,11 @@ export class EventSubscriber {
     private readonly connection: Redis,
     /** Environment prefix (`APP_ENV`). */
     private readonly prefix: string,
-    private readonly onError: (error: unknown, channel: string) => void = () => undefined,
+    private readonly onError: (
+      error: unknown,
+      channel: string,
+      name: PubSubEventName,
+    ) => void = () => undefined,
     private readonly context: EventContext = NO_EVENT_CONTEXT,
     private readonly onReceived: (name: PubSubEventName) => void = () => undefined,
   ) {}
@@ -175,21 +179,21 @@ export class EventSubscriber {
     this.listening = true;
     this.connection.on('message', (channel: string, message: string) => {
       const handlers = this.handlers.get(channel);
-      if (!handlers) return;
+      const name = this.names.get(channel);
+      if (!handlers || !name) return;
       let envelope: PubSubEnvelope;
       try {
         envelope = decodePubSubMessage(message);
       } catch (error) {
-        this.onError(error, channel);
+        this.onError(error, channel, name);
         return;
       }
-      const name = this.names.get(channel);
-      if (name) this.onReceived(name);
+      this.onReceived(name);
       for (const handler of handlers) {
         void this.context.run(envelope.meta, () =>
           Promise.resolve()
             .then(() => handler(envelope.payload, envelope.meta))
-            .catch((error: unknown) => this.onError(error, channel)),
+            .catch((error: unknown) => this.onError(error, channel, name)),
         );
       }
     });

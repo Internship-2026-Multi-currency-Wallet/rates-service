@@ -172,15 +172,16 @@ handbook's `metrics.md`).
   public domain to `PORT` only. Metrics carry no ids, amounts or secrets.
 - **Labels on every series**: `service` (`rates-service`) and `env` (`APP_ENV`).
 
-| Metric                          | Type      | Labels              | Meaning                                                                   |
-| ------------------------------- | --------- | ------------------- | ------------------------------------------------------------------------- |
-| `http_requests_total`           | counter   | `operation, status` | HTTP requests, except `/health`, `/metrics` and CORS preflights           |
-| `http_request_duration_seconds` | histogram | `operation`         | Request duration; buckets 5 ms … 10 s                                     |
-| `graphql_errors_total`          | counter   | `operation, code`   | Failed GraphQL requests by the error code the client sees (once per code) |
-| `graphql_ws_connections`        | gauge     | —                   | Open GraphQL websocket connections                                        |
-| `events_published_total`        | counter   | `type`              | Events published through `EventPublisher`                                 |
-| `rate_ticks_published_total`    | counter   | `pair`              | Rate ticks published (`rate.tick`), by currency pair, e.g. `USD/UAH`      |
-| `process_*`, `nodejs_*`         | default   | —                   | CPU, memory, heap, event-loop lag, GC, start time (prom-client defaults)  |
+| Metric                          | Type      | Labels              | Meaning                                                                     |
+| ------------------------------- | --------- | ------------------- | --------------------------------------------------------------------------- |
+| `http_requests_total`           | counter   | `operation, status` | HTTP requests, except `/health`, `/metrics` and CORS preflights             |
+| `http_request_duration_seconds` | histogram | `operation`         | Request duration; buckets 5 ms … 10 s                                       |
+| `graphql_errors_total`          | counter   | `operation, code`   | Failed GraphQL requests by the error code the client sees (once per code)   |
+| `graphql_ws_connections`        | gauge     | —                   | Open GraphQL websocket connections                                          |
+| `events_published_total`        | counter   | `type`              | Events published through `EventPublisher`                                   |
+| `events_failed_total`           | counter   | `type`              | Received events that failed to decode, or whose handler threw (per handler) |
+| `rate_ticks_published_total`    | counter   | `pair`              | Rate ticks published (`rate.tick`), by currency pair, e.g. `USD/UAH`        |
+| `process_*`, `nodejs_*`         | default   | —                   | CPU, memory, heap, event-loop lag, GC, start time (prom-client defaults)    |
 
 - **`operation`**: the operation type and its first root field (`query me`), or the route of a REST request
   (`POST /diagnostics/ping`). The client's own operation name is not used, because any client can invent names and

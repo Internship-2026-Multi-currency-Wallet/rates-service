@@ -65,14 +65,21 @@ export function loggingEventContext(logger: PinoLogger, service: string): EventC
     },
     {
       provide: EventSubscriber,
-      inject: [REDIS, AppConfig, PinoLogger],
-      useFactory: (redis: Redis, config: AppConfig, logger: PinoLogger) => {
+      inject: [REDIS, AppConfig, PinoLogger, Metrics],
+      useFactory: (redis: Redis, config: AppConfig, logger: PinoLogger, metrics: Metrics) => {
         logger.setContext('EventSubscriber');
+        const failed = metrics.counter({
+          name: 'events_failed_total',
+          help: 'Received events that failed to decode or whose handler threw, by event type',
+          labelNames: ['type'],
+        });
         return new EventSubscriber(
           redis.duplicate(),
           config.appEnv,
-          (error, channel) =>
-            logger.error({ err: error, channel }, `Handler for "${channel}" failed`),
+          (error, channel, name) => {
+            failed.inc({ type: name });
+            logger.error({ err: error, channel }, `Handler for "${channel}" failed`);
+          },
           loggingEventContext(logger, config.serviceName),
         );
       },
