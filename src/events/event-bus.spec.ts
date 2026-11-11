@@ -215,6 +215,135 @@ describe('EventSubscriber', () => {
   });
 });
 
+describe('EventSubscriber while Redis is unavailable', () => {
+  function fakeConnection(status = 'reconnecting') {
+    const emitter = new EventEmitter();
+    return Object.assign(emitter, {
+      status,
+      subscribe: jest.fn<(channel: string) => Promise<unknown>>(() => Promise.resolve(1)),
+      unsubscribe: jest.fn<(channel: string) => Promise<unknown>>(() => Promise.resolve(0)),
+      quit: jest.fn(() => Promise.resolve('OK')),
+      disconnect: jest.fn(),
+    });
+  }
+
+  it('rolls back a failed SUBSCRIBE so a later subscribe sends it again', async () => {
+    const connection = fakeConnection();
+    connection.subscribe.mockRejectedValueOnce(new Error('Connection is closed.'));
+    const subscriber = new EventSubscriber(connection as unknown as Redis, 'staging');
+    const first = jest.fn<() => void>();
+
+    await expect(subscriber.subscribe('system.ping', first)).rejects.toThrow(
+      'Connection is closed.',
+    );
+    const second = jest.fn<() => void>();
+    await subscriber.subscribe('system.ping', second);
+    expect(connection.subscribe).toHaveBeenCalledTimes(2);
+
+    connection.emit('message', 'staging:system.ping', JSON.stringify({ v: 1 }));
+    await new Promise((resolve) => setImmediate(resolve));
+    expect(first).not.toHaveBeenCalled();
+    expect(second).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps event-name callbacks in step with failed, retried and removed subscriptions', async () => {
+    const connection = fakeConnection('ready');
+    connection.subscribe.mockRejectedValueOnce(new Error('Connection is closed.'));
+    const onError = jest.fn();
+    const onReceived = jest.fn();
+    const subscriber = new EventSubscriber(
+      connection as unknown as Redis,
+      'staging',
+      onError,
+      undefined,
+      onReceived,
+    );
+    const ping = () => connection.emit('message', 'staging:system.ping', 'not json');
+    const flush = () => new Promise((resolve) => setImmediate(resolve));
+
+    await expect(subscriber.subscribe('system.ping', () => undefined)).rejects.toThrow();
+    ping(); // the failed subscription left nothing behind
+    await flush();
+    expect(onReceived).not.toHaveBeenCalled();
+
+    const stale = await subscriber.subscribe('system.ping', () => undefined);
+    await stale();
+    const off = await subscriber.subscribe('system.ping', () => undefined);
+    await stale(); // a late cleanup of the earlier subscription must not remove the newer one
+    ping();
+    await flush();
+    expect(onReceived).toHaveBeenCalledTimes(1);
+    expect(onReceived).toHaveBeenCalledWith('system.ping');
+    expect(onError).toHaveBeenCalledWith(expect.any(Error), 'staging:system.ping', 'system.ping');
+
+    await off();
+    ping();
+    await flush();
+    expect(onReceived).toHaveBeenCalledTimes(1);
+    expect(onError).toHaveBeenCalledTimes(1);
+  });
+
+  it('shares one pending SUBSCRIBE between concurrent callers', async () => {
+    const connection = fakeConnection();
+    let confirm!: (value: unknown) => void;
+    connection.subscribe.mockReturnValueOnce(new Promise((resolve) => (confirm = resolve)));
+    const subscriber = new EventSubscriber(connection as unknown as Redis, 'staging');
+    const settled: string[] = [];
+
+    const a = subscriber.subscribe('rate.tick', () => undefined).then(() => settled.push('a'));
+    const b = subscriber.subscribe('rate.tick', () => undefined).then(() => settled.push('b'));
+    await new Promise((resolve) => setImmediate(resolve));
+    expect(settled).toEqual([]); // nobody is told "subscribed" before Redis confirms
+    confirm(1);
+    await Promise.all([a, b]);
+    expect(settled).toEqual(['a', 'b']);
+    expect(connection.subscribe).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not wait for UNSUBSCRIBE while disconnected', async () => {
+    const connection = fakeConnection('ready');
+    const subscriber = new EventSubscriber(connection as unknown as Redis, 'staging');
+    const off = await subscriber.subscribe('rate.tick', () => undefined);
+    connection.status = 'reconnecting';
+    connection.unsubscribe.mockReturnValueOnce(new Promise(() => undefined)); // never answers
+
+    await expect(off()).resolves.toBeUndefined();
+    expect(connection.unsubscribe).toHaveBeenCalledWith('staging:rate.tick');
+    await off(); // idempotent
+    expect(connection.unsubscribe).toHaveBeenCalledTimes(1);
+
+    await subscriber.close();
+    expect(connection.disconnect).toHaveBeenCalled();
+    expect(connection.quit).not.toHaveBeenCalled();
+  });
+});
+
+describe('EventSubscriber.close', () => {
+  afterEach(() => jest.useRealTimers());
+
+  it('completes when the connection was ready but QUIT never settles', async () => {
+    jest.useFakeTimers();
+    const connection = Object.assign(new EventEmitter(), {
+      status: 'ready',
+      subscribe: jest.fn(() => Promise.resolve(1)),
+      quit: jest.fn(() => new Promise(() => undefined)), // Redis dropped during QUIT
+      disconnect: jest.fn(),
+    });
+    const subscriber = new EventSubscriber(connection as unknown as Redis, 'staging');
+    await subscriber.subscribe('rate.tick', () => undefined);
+
+    let closed = false;
+    const closing = subscriber.close().then(() => (closed = true));
+    await jest.advanceTimersByTimeAsync(999);
+    expect(closed).toBe(false);
+    expect(connection.disconnect).not.toHaveBeenCalled();
+    await jest.advanceTimersByTimeAsync(1); // closeRedis deadline (1 s)
+    await closing;
+    expect(connection.quit).toHaveBeenCalledTimes(1);
+    expect(connection.disconnect).toHaveBeenCalledTimes(1);
+  });
+});
+
 describe('Redis names', () => {
   it('prefixes channels and streams with the environment', () => {
     expect(redisName('wisla-uat', 'x')).toBe('wisla-uat:x');

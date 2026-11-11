@@ -158,8 +158,8 @@ there (the mentor does it in Dokploy) and redeploy.
 - **Client IP.** Express trusts one proxy hop (`trust proxy = 1`, `src/configure-app.ts`, because Traefik is the
   only proxy), so the IP is the last `X-Forwarded-For` entry. A client cannot invent a new IP by adding entries.
 - **Not counted:** `GET /health` (the controller is marked `@SkipThrottle()`) and everything that arrives over the
-  WebSocket (subscriptions). The GraphQL query `health` is counted like any other query. There is no `/metrics`
-  endpoint in this service.
+  WebSocket (subscriptions). The GraphQL query `health` is counted like any other query. `GET /metrics` is served
+  on its own port (see [Metrics](#metrics)) and never reaches the guard.
 - **Known limits (follow-ups):** a guard runs only when a resolver or controller is about to be called, so these
   requests are not counted: refused by `AuthGuard` (401) or `PermissionGuard` (403), GraphQL introspection
   (`__schema`, `__type`), and GraphQL documents that cannot be parsed or fail validation. Server-to-server calls are
@@ -168,8 +168,8 @@ there (the mentor does it in Dokploy) and redeploy.
   with the real rates client.
 - **Logging.** Only the first refused request of a caller in a window is logged (`request throttled`), so a flood of
   refused requests does not flood the logs.
-- **Redis down.** Requests pass without a limit and a warning is logged at most once a minute. The `X-RateLimit-*`
-  headers then show a full budget and mean nothing.
+- **Redis down or still connecting** (e.g. right after startup). Requests pass without a limit and a warning is
+  logged at most once a minute. The `X-RateLimit-*` headers then show a full budget and mean nothing.
 - An allowed response carries `X-RateLimit-Limit`, `X-RateLimit-Remaining` and `X-RateLimit-Reset` (seconds left);
   a refused one carries `Retry-After`.
 
@@ -339,6 +339,8 @@ To add a setting: declare it in `settings.schema.ts` and give it a default in `s
 The client customization module (hooks, client-only endpoints) is a separate task.
 
 ### Events — `src/events`
+
+An in-flight command may be resent after reconnect; a timeout does not prove non-delivery.
 
 `catalog.ts` is the typed contract for Redis events, **identical in all three backends**:
 

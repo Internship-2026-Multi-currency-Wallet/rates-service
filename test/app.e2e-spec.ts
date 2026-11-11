@@ -22,9 +22,18 @@ describe('rates-service (e2e)', () => {
   });
 
   it('GET /health reports service, client and dependencies', async () => {
-    const res = await request(app.getHttpServer() as App)
+    // Redis connects in the background, so probes before it is ready may report it DOWN.
+    const deadline = Date.now() + 5000;
+    let res = await request(app.getHttpServer() as App)
       .get('/health')
       .expect(200);
+    while (res.body.redis !== 'UP' && Date.now() < deadline) {
+      expect(res.body).toMatchObject({ status: 'degraded', db: 'UP', redis: 'DOWN' });
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      res = await request(app.getHttpServer() as App)
+        .get('/health')
+        .expect(200);
+    }
     expect(res.body).toMatchObject({
       status: 'ok',
       appEnv: 'local',

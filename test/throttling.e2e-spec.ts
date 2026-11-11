@@ -1,4 +1,5 @@
 import { randomInt, randomUUID } from 'node:crypto';
+import { once } from 'node:events';
 import type { Server } from 'node:http';
 import type { INestApplication } from '@nestjs/common';
 import { createClient } from 'graphql-ws';
@@ -29,6 +30,11 @@ const auth = (id: string, aud: 'wallet' | 'backoffice' = 'wallet') => ({
   Authorization: bearer({ sub: id, aud }),
 });
 const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
+// The command client connects in the background; until it is ready the limiter lets requests through uncounted.
+const redisReady = async (app: INestApplication): Promise<void> => {
+  const redis = app.get<Redis>(REDIS);
+  if (redis.status !== 'ready') await once(redis, 'ready', { signal: AbortSignal.timeout(10_000) });
+};
 
 const gqlOn = (app: INestApplication, query: string, headers: Record<string, string>) =>
   request(app.getHttpServer() as App)
@@ -51,10 +57,11 @@ describe('global rate limit (e2e)', () => {
 
   beforeAll(async () => {
     app = await createApp(LIMITS);
+    await redisReady(app);
   });
 
   afterAll(async () => {
-    await app.close();
+    await app?.close();
   });
 
   it('counts anonymous requests per client IP', async () => {
@@ -182,13 +189,14 @@ describe('global rate limit and subscriptions (e2e)', () => {
 
   beforeAll(async () => {
     app = await createApp(LIMITS);
+    await redisReady(app);
     await app.listen(0);
     const address = (app.getHttpServer() as Server).address() as { port: number };
     url = `ws://127.0.0.1:${address.port}/graphql`;
   });
 
   afterAll(async () => {
-    await app.close();
+    await app?.close();
   });
 
   it('does not count or refuse websocket operations, even when the caller is over the limit', async () => {
@@ -236,7 +244,7 @@ describe('global rate limit when Redis is unavailable (e2e)', () => {
   });
 
   afterAll(async () => {
-    await app.close();
+    await app?.close();
   });
 
   it('lets requests through instead of failing them', async () => {

@@ -1,6 +1,6 @@
 /**
  * Writes `schema.graphql` from the code-first resolvers without serving traffic.
- * Database and Redis are not needed (connections are lazy).
+ * Schema generation must remain usable without Redis.
  *
  *   npm run schema:generate
  */
