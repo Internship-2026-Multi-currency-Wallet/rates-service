@@ -8,13 +8,18 @@ import { HealthService } from './health.service.js';
 export class HealthController {
   constructor(private readonly health: HealthService) {}
 
-  /** Liveness/readiness probe: 200 when all dependencies are up, 503 otherwise. */
+  /**
+   * Liveness/readiness probe. 503 when the database is down. Redis alone being down is
+   * `degraded` with 200: the service still serves requests and its Redis clients reconnect
+   * on their own, so restarting it would not help.
+   */
   @Public()
   @Get()
   async get(@Res({ passthrough: true }) res: Response): Promise<Health & { status: string }> {
     const health = await this.health.check();
-    const ok = health.db === DependencyStatus.UP && health.redis === DependencyStatus.UP;
-    res.status(ok ? HttpStatus.OK : HttpStatus.SERVICE_UNAVAILABLE);
+    const dbUp = health.db === DependencyStatus.UP;
+    const ok = dbUp && health.redis === DependencyStatus.UP;
+    res.status(dbUp ? HttpStatus.OK : HttpStatus.SERVICE_UNAVAILABLE);
     return { status: ok ? 'ok' : 'degraded', ...health };
   }
 }

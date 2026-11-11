@@ -12,6 +12,7 @@
  * incoming meta, so a consumer logs the same `requestId` as the producer.
  */
 import type { Redis } from 'ioredis';
+import { closeRedis } from '../redis/redis-connection.js';
 import {
   EVENTS,
   type EventMeta,
@@ -107,12 +108,22 @@ export function decodePubSubMessage(message: string): PubSubEnvelope {
  * Subscribes to pub/sub events. Uses its own Redis connection (a connection in subscriber
  * mode cannot run other commands). Call `close()` on shutdown.
  *
+ * Ownership on reconnect: Redis-side subscriptions belong to ioredis. Give the connection
+ * `maxRetriesPerRequest: null` (see `SUBSCRIBER_CLIENT_OPTIONS`): a SUBSCRIBE issued while Redis
+ * is down then stays queued and is sent once it is reachable, and `autoResubscribe` restores it
+ * after every later reconnect. This class only keeps the local handlers (one `message` listener,
+ * one handler set per channel) and never re-registers them, so a reconnect cannot duplicate them.
+ *
  * Stream events are read with consumer groups (XREADGROUP + XACK) on `eventStream(prefix, name)`;
  * use `decodeStreamEntry` / `decodeStreamMeta` to turn a raw entry into a typed payload and its
  * meta, and `EventContext.run(meta, ...)` to handle it in the producer's context.
  */
 export class EventSubscriber {
-  private readonly handlers = new Map<string, Set<Handler>>();
+  /** Per channel: its handlers and the (possibly still pending) SUBSCRIBE. */
+  private readonly channels = new Map<
+    string,
+    { handlers: Set<Handler>; ready: Promise<unknown> }
+  >();
   private listening = false;
 
   constructor(
@@ -123,40 +134,59 @@ export class EventSubscriber {
     private readonly context: EventContext = NO_EVENT_CONTEXT,
   ) {}
 
+  /**
+   * Resolves once Redis confirmed the SUBSCRIBE (immediately if the channel is already
+   * subscribed). If the SUBSCRIBE fails, the handler is removed again and the promise rejects;
+   * a later call subscribes anew. Do not await this during startup if Redis may be down.
+   */
   async subscribe<N extends PubSubEventName>(
     name: N,
     handler: (payload: EventPayloads[N], meta: EventMeta) => void | Promise<void>,
   ): Promise<Unsubscribe> {
     const channel = eventChannel(this.prefix, name);
     this.listen();
-    let set = this.handlers.get(channel);
-    if (!set) {
-      set = new Set();
-      this.handlers.set(channel, set);
-      await this.connection.subscribe(channel);
+    let entry = this.channels.get(channel);
+    if (!entry) {
+      entry = { handlers: new Set(), ready: this.connection.subscribe(channel) };
+      this.channels.set(channel, entry);
     }
+    const subscription = entry;
     const wrapped = handler as Handler;
-    set.add(wrapped);
-    return async () => {
-      set.delete(wrapped);
-      if (set.size === 0) {
-        this.handlers.delete(channel);
-        await this.connection.unsubscribe(channel);
+    subscription.handlers.add(wrapped);
+    const remove = (): boolean => {
+      if (!subscription.handlers.delete(wrapped)) return false;
+      if (subscription.handlers.size > 0 || this.channels.get(channel) !== subscription) {
+        return false;
       }
+      this.channels.delete(channel);
+      return true;
+    };
+    try {
+      await subscription.ready;
+    } catch (error) {
+      remove();
+      throw error;
+    }
+    return async () => {
+      if (!remove()) return;
+      const done = this.connection.unsubscribe(channel);
+      // While disconnected the UNSUBSCRIBE stays queued (sent after the auto-resubscribe on
+      // reconnect); do not let a caller, e.g. shutdown, wait for Redis to come back.
+      if (this.connection.status === 'ready') await done;
+      else done.catch(() => undefined);
     };
   }
 
   async close(): Promise<void> {
-    this.handlers.clear();
-    if (this.connection.status === 'ready') await this.connection.quit();
-    else this.connection.disconnect();
+    this.channels.clear();
+    await closeRedis(this.connection);
   }
 
   private listen(): void {
     if (this.listening) return;
     this.listening = true;
     this.connection.on('message', (channel: string, message: string) => {
-      const handlers = this.handlers.get(channel);
+      const handlers = this.channels.get(channel)?.handlers;
       if (!handlers) return;
       let envelope: PubSubEnvelope;
       try {
