@@ -1,17 +1,28 @@
 import { join } from 'node:path';
 import { ApolloDriver, type ApolloDriverConfig } from '@nestjs/apollo';
+import type { Response } from 'express';
 import type { PinoLogger } from 'nestjs-pino';
 import { AppConfig } from '../config/app-config.js';
 import { type RequestLike, requestFromConnectionParams } from '../auth/request-context.js';
 import { graphqlLoggingPlugin, subscriptionLoggingHooks } from '../logging/graphql-logging.js';
+import { ThrottleErrorCode } from '../throttling/throttle-errors.js';
 
 /** Path of the committed GraphQL contract. Other repositories consume this file. */
 export const SCHEMA_FILE = join(process.cwd(), 'schema.graphql');
 
 interface ContextInput {
   req?: RequestLike;
+  res?: Response;
   connectionParams?: Record<string, unknown>;
   extra?: { request?: unknown };
+}
+
+const CLIENT_ERROR_CODES = Object.values(ThrottleErrorCode);
+
+export interface GraphqlContext {
+  req: RequestLike;
+  /** Absent over websocket. */
+  res?: Response;
 }
 
 /**
@@ -30,11 +41,12 @@ export function graphqlOptions(config: AppConfig, logger: PinoLogger): ApolloDri
     // Subscription start/end are logged with the connection's requestId.
     subscriptions: { 'graphql-ws': { path: '/graphql', ...subscriptionLoggingHooks(logger) } },
     // Names the operation in the access log and logs resolver errors with the requestId.
-    plugins: [graphqlLoggingPlugin()],
+    plugins: [graphqlLoggingPlugin({ clientErrorCodes: CLIENT_ERROR_CODES })],
     // HTTP requests carry headers; websocket requests carry connectionParams.
     // Both end up as `context.req.headers`, which the auth guard reads.
-    context: ({ req, connectionParams }: ContextInput) => ({
+    context: ({ req, res, connectionParams }: ContextInput): GraphqlContext => ({
       req: req ?? requestFromConnectionParams(connectionParams),
+      res,
     }),
   };
 }
