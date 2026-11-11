@@ -4,5 +4,8 @@ process.env.JWT_SECRET ??= 'e2e-only-jwt-secret-0123456789-abcdefgh';
 process.env.DATABASE_URL ??= 'mysql://wallet:wallet@localhost:3306/rates_service';
 process.env.REDIS_URL ??= 'redis://localhost:6379';
 process.env.METRICS_PORT ??= '0';
+// E2e files share one Redis and one IP, so the default limits would make them flaky; throttling.e2e-spec.ts sets its own.
+process.env.THROTTLE_LIMIT_ANONYMOUS ??= '100000';
+process.env.THROTTLE_LIMIT_USER ??= '100000';
 // The JSON access log would flood the test output; set LOG_LEVEL=info to see it.
 process.env.LOG_LEVEL ??= 'silent';

@@ -6,6 +6,7 @@ export default {
   rootDir: 'src',
   testRegex: '.*\\.spec\\.ts$',
   testEnvironment: 'node',
+  setupFiles: ['<rootDir>/../test/preload-nest.ts'],
   extensionsToTreatAsEsm: ['.ts'],
   moduleNameMapper: { '^(\\.{1,2}/.*)\\.js$': '$1' },
   transform: {
