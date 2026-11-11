@@ -1,7 +1,6 @@
 import type { Redis, RedisOptions } from 'ioredis';
 import type { PinoLogger } from 'nestjs-pino';
 
-/** Upper bound for one Redis command issued while serving a request (health, publish, ...). */
 export const REDIS_COMMAND_TIMEOUT_MS = 2000;
 
 /**
@@ -25,10 +24,7 @@ export const SUBSCRIBER_CLIENT_OPTIONS: RedisOptions = {
   autoResubscribe: true,
 };
 
-/**
- * A reason that is safe to log: the error code (`ECONNREFUSED`), the Redis error word
- * (`NOAUTH`, `WRONGPASS`) or the error class. Never the message (it may contain hosts).
- */
+/** Only log error identifiers because Redis error messages may contain host information. */
 export function redisErrorReason(error: unknown): string {
   if (error !== null && typeof error === 'object') {
     const { code, name, message } = error as { code?: unknown; name?: unknown; message?: unknown };
@@ -70,7 +66,6 @@ export function watchRedisConnection(
   });
 }
 
-/** Closes a client without waiting on an unreachable Redis: QUIT only when ready, bounded. */
 export async function closeRedis(redis: Redis, timeoutMs = 1000): Promise<void> {
   if (redis.status !== 'ready') {
     redis.disconnect();

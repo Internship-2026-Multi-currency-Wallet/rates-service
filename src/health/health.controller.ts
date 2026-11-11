@@ -8,11 +8,7 @@ import { HealthService } from './health.service.js';
 export class HealthController {
   constructor(private readonly health: HealthService) {}
 
-  /**
-   * Liveness/readiness probe. 503 when the database is down. Redis alone being down is
-   * `degraded` with 200: the service still serves requests and its Redis clients reconnect
-   * on their own, so restarting it would not help.
-   */
+  /** Redis-only outages must not trigger restarts because clients reconnect automatically. */
   @Public()
   @Get()
   async get(@Res({ passthrough: true }) res: Response): Promise<Health & { status: string }> {
