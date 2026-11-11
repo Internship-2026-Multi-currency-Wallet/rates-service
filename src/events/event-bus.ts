@@ -108,18 +108,13 @@ export function decodePubSubMessage(message: string): PubSubEnvelope {
  * Subscribes to pub/sub events. Uses its own Redis connection (a connection in subscriber
  * mode cannot run other commands). Call `close()` on shutdown.
  *
- * Ownership on reconnect: Redis-side subscriptions belong to ioredis. Give the connection
- * `maxRetriesPerRequest: null` (see `SUBSCRIBER_CLIENT_OPTIONS`): a SUBSCRIBE issued while Redis
- * is down then stays queued and is sent once it is reachable, and `autoResubscribe` restores it
- * after every later reconnect. This class only keeps the local handlers (one `message` listener,
- * one handler set per channel) and never re-registers them, so a reconnect cannot duplicate them.
+ * ioredis owns resubscription after reconnects; this class only keeps local handlers.
  *
  * Stream events are read with consumer groups (XREADGROUP + XACK) on `eventStream(prefix, name)`;
  * use `decodeStreamEntry` / `decodeStreamMeta` to turn a raw entry into a typed payload and its
  * meta, and `EventContext.run(meta, ...)` to handle it in the producer's context.
  */
 export class EventSubscriber {
-  /** Per channel: its handlers and the (possibly still pending) SUBSCRIBE. */
   private readonly channels = new Map<
     string,
     { handlers: Set<Handler>; ready: Promise<unknown> }
@@ -134,11 +129,7 @@ export class EventSubscriber {
     private readonly context: EventContext = NO_EVENT_CONTEXT,
   ) {}
 
-  /**
-   * Resolves once Redis confirmed the SUBSCRIBE (immediately if the channel is already
-   * subscribed). If the SUBSCRIBE fails, the handler is removed again and the promise rejects;
-   * a later call subscribes anew. Do not await this during startup if Redis may be down.
-   */
+  /** Resolves once Redis confirms the SUBSCRIBE; on failure the handler is removed again. */
   async subscribe<N extends PubSubEventName>(
     name: N,
     handler: (payload: EventPayloads[N], meta: EventMeta) => void | Promise<void>,

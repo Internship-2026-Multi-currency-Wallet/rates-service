@@ -38,7 +38,6 @@ export class DiagnosticsController {
   @HttpCode(200)
   async ping(@CurrentUser() user: AuthUser): Promise<{ published: true }> {
     try {
-      // Bounded: the shared Redis client has a command timeout.
       await this.publisher.publish('system.ping', {
         v: 1,
         from: this.config.serviceName,
@@ -47,7 +46,7 @@ export class DiagnosticsController {
     } catch (err) {
       this.logger.warn(
         { userId: user.id, reason: redisErrorReason(err) },
-        'system.ping not published: Redis unavailable',
+        'system.ping publication failed or timed out',
       );
       throw new ServiceUnavailableException('Redis unavailable');
     }
@@ -66,10 +65,7 @@ export class DiagnosticsModule implements OnModuleInit, OnModuleDestroy {
     @InjectPinoLogger(DiagnosticsModule.name) private readonly logger: PinoLogger,
   ) {}
 
-  /**
-   * Not awaited: startup must not depend on Redis. While Redis is down the SUBSCRIBE stays
-   * queued on the subscriber connection and completes once Redis is reachable.
-   */
+  /** Not awaited, so startup does not depend on Redis. */
   onModuleInit(): void {
     this.subscriber
       .subscribe('system.ping', (ping, meta) => {
@@ -92,10 +88,7 @@ export class DiagnosticsModule implements OnModuleInit, OnModuleDestroy {
       );
   }
 
-  /**
-   * Not awaited: an UNSUBSCRIBE pending on a dropped connection must not hold up shutdown;
-   * `EventsModule` closes the subscriber connection afterwards.
-   */
+  /** Not awaited, so a pending UNSUBSCRIBE cannot block shutdown. */
   onModuleDestroy(): void {
     this.closing = true;
     this.unsubscribe?.().catch((err: unknown) =>

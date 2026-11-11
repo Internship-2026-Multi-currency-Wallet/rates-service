@@ -30,7 +30,7 @@ describe('DiagnosticsController.ping', () => {
     await expect(controller.ping(user)).rejects.toBeInstanceOf(ServiceUnavailableException);
     expect(logger.warn).toHaveBeenCalledWith(
       { userId: 'u1', reason: 'ECONNREFUSED' },
-      expect.any(String),
+      'system.ping publication failed or timed out',
     );
   });
 });

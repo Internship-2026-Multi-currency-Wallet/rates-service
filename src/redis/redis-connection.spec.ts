@@ -1,6 +1,7 @@
 import { jest } from '@jest/globals';
 import { EventEmitter } from 'node:events';
-import type { Redis } from 'ioredis';
+import { createServer, type Socket } from 'node:net';
+import { Redis } from 'ioredis';
 import type { PinoLogger } from 'nestjs-pino';
 import {
   closeRedis,
@@ -22,15 +23,15 @@ describe('Redis client options', () => {
     const subscriber = createSubscriberRedis(redis);
     try {
       expect(redis.options).toMatchObject({
-        lazyConnect: true,
+        lazyConnect: false,
         maxRetriesPerRequest: 3,
         commandTimeout: REDIS_COMMAND_TIMEOUT_MS,
-        enableOfflineQueue: true,
+        enableOfflineQueue: false,
       });
+      expect(subscriber.options.enableOfflineQueue).toBe(true);
       expect(subscriber.options.maxRetriesPerRequest).toBeNull();
       expect(subscriber.options.commandTimeout).toBeUndefined();
       expect(subscriber.options.autoResubscribe).toBe(true);
-      expect(subscriber.options.lazyConnect).toBe(true);
       // Both reconnect forever with the ioredis exponential backoff.
       for (const client of [redis, subscriber]) {
         const strategy = client.options.retryStrategy!;
@@ -67,30 +68,87 @@ describe('redisErrorReason', () => {
 });
 
 describe('watchRedisConnection', () => {
-  it('warns once per outage with a safe reason and reports recovery', () => {
+  const refused = Object.assign(new Error('connect ECONNREFUSED 127.0.0.1:16379'), {
+    code: 'ECONNREFUSED',
+  });
+
+  function watched() {
     const redis = new EventEmitter();
     const logger = fakeLogger();
     watchRedisConnection(redis as unknown as Redis, logger as unknown as PinoLogger, 'subscriber');
-    const error = Object.assign(new Error('connect ECONNREFUSED 127.0.0.1:16379'), {
-      code: 'ECONNREFUSED',
-    });
+    return { redis, logger };
+  }
 
-    redis.emit('ready'); // first connect: nothing to report
-    redis.emit('error', error);
-    redis.emit('error', error);
-    redis.emit('error', error);
+  it('warns when a connection closes and reconnects without any error', () => {
+    const { redis, logger } = watched();
+    redis.emit('ready');
+    redis.emit('reconnecting', 50); // e.g. Redis restarted and closed the socket gracefully
+    expect(logger.warn).toHaveBeenCalledTimes(1);
+    expect(logger.warn).toHaveBeenCalledWith(
+      { connection: 'subscriber', reason: 'CLOSED' },
+      expect.any(String),
+    );
+  });
+
+  it('warns once per outage with the safe reason of the preceding error', () => {
+    const { redis, logger } = watched();
+    redis.emit('error', refused);
+    redis.emit('reconnecting', 50);
+    redis.emit('error', refused);
+    redis.emit('reconnecting', 100);
     expect(logger.warn).toHaveBeenCalledTimes(1);
     expect(logger.warn).toHaveBeenCalledWith(
       { connection: 'subscriber', reason: 'ECONNREFUSED' },
       expect.any(String),
     );
-    expect(logger.debug).toHaveBeenCalledTimes(2);
     expect(JSON.stringify(logger.warn.mock.calls)).not.toContain('127.0.0.1');
+  });
 
+  it('logs recovery once and warns again on the next outage', () => {
+    const { redis, logger } = watched();
+    redis.emit('ready'); // first connect: nothing to report
+    expect(logger.info).not.toHaveBeenCalled();
+    redis.emit('error', refused);
+    redis.emit('reconnecting', 50);
     redis.emit('ready');
+    expect(logger.info).toHaveBeenCalledTimes(1);
     expect(logger.info).toHaveBeenCalledWith({ connection: 'subscriber' }, expect.any(String));
-    redis.emit('error', error);
+    redis.emit('reconnecting', 50);
     expect(logger.warn).toHaveBeenCalledTimes(2);
+    expect(logger.warn).toHaveBeenLastCalledWith(
+      { connection: 'subscriber', reason: 'CLOSED' }, // the earlier error does not leak into it
+      expect.any(String),
+    );
+  });
+
+  it('real ioredis: a socket dropped without an error is reported as an outage', async () => {
+    const sockets: Socket[] = [];
+    const server = createServer((socket) => sockets.push(socket)); // accepts, never answers
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+    const { port } = server.address() as { port: number };
+    // Short disconnectTimeout: the stream is already closed, so ioredis would wait its full 2 s.
+    const redis = new Redis({
+      port,
+      host: '127.0.0.1',
+      retryStrategy: () => 60_000,
+      disconnectTimeout: 10,
+    });
+    const logger = fakeLogger();
+    watchRedisConnection(redis, logger as unknown as PinoLogger, 'command');
+    try {
+      while (sockets.length === 0) await new Promise((resolve) => setTimeout(resolve, 5));
+      const reconnecting = new Promise((resolve) => redis.once('reconnecting', resolve));
+      sockets[0].end(); // graceful FIN, as Redis does when it shuts down
+      await reconnecting;
+      expect(logger.warn).toHaveBeenCalledWith(
+        { connection: 'command', reason: 'CLOSED' },
+        expect.any(String),
+      );
+    } finally {
+      redis.disconnect();
+      for (const socket of sockets) socket.destroy();
+      await new Promise((resolve) => server.close(resolve));
+    }
   });
 });
 

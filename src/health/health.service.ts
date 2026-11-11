@@ -53,7 +53,6 @@ export class HealthService {
 
   private async checkRedis(): Promise<DependencyStatus> {
     try {
-      // A lazy client connects on the first command; the timeout also covers that.
       await withTimeout(this.redis.ping());
       return DependencyStatus.UP;
     } catch {

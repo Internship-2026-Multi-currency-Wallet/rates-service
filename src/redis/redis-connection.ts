@@ -5,27 +5,21 @@ import type { PinoLogger } from 'nestjs-pino';
 export const REDIS_COMMAND_TIMEOUT_MS = 2000;
 
 /**
- * Shared command client: serves HTTP requests, so it fails fast. `commandTimeout` bounds every
- * command even while the client is reconnecting (offline queue); `maxRetriesPerRequest` drops
- * queued commands after a few failed reconnects. Reconnects use the ioredis default backoff
- * (exponential, capped at 5 s, with jitter) and never give up.
- *
- * `lazyConnect`: the app can start (and generate its schema) without Redis running.
+ * Request client: connects at startup in the background and has no offline queue, so a command
+ * issued while Redis is down fails at once and is never sent later.
  */
 export const COMMAND_CLIENT_OPTIONS: RedisOptions = {
-  lazyConnect: true,
   maxRetriesPerRequest: 3,
   commandTimeout: REDIS_COMMAND_TIMEOUT_MS,
+  enableOfflineQueue: false,
 };
 
 /**
- * Dedicated pub/sub client (see `EventSubscriber`). Nobody waits on it during a request, so
- * SUBSCRIBE/UNSUBSCRIBE stay queued until Redis is reachable instead of failing:
- * `maxRetriesPerRequest: null` (never flush the offline queue) and no `commandTimeout`.
- * Once a SUBSCRIBE succeeded, ioredis (`autoResubscribe`) restores it after every reconnect.
- * Same default reconnect backoff as the command client.
+ * Pub/sub client: keeps SUBSCRIBE queued until Redis is reachable; ioredis resubscribes after
+ * reconnects.
  */
 export const SUBSCRIBER_CLIENT_OPTIONS: RedisOptions = {
+  enableOfflineQueue: true,
   maxRetriesPerRequest: null,
   commandTimeout: undefined,
   autoResubscribe: true,
@@ -49,9 +43,8 @@ export function redisErrorReason(error: unknown): string {
 }
 
 /**
- * Turns ioredis connection errors into one warning per outage (then `debug` while it stays
- * down) and an `info` when the connection is ready again. Without an `error` listener ioredis
- * prints every failed reconnect to stderr.
+ * One warning per outage, on `reconnecting`, which ioredis does not emit for QUIT or
+ * `disconnect()`.
  */
 export function watchRedisConnection(
   redis: Redis,
@@ -59,16 +52,18 @@ export function watchRedisConnection(
   connection: 'command' | 'subscriber',
 ): void {
   let down = false;
+  let reason = 'CLOSED';
   redis.on('error', (error: unknown) => {
-    const reason = redisErrorReason(error);
-    if (down) {
-      logger.debug({ connection, reason }, 'Redis still unavailable');
-      return;
-    }
+    reason = redisErrorReason(error);
+    logger.debug({ connection, reason }, 'Redis connection error');
+  });
+  redis.on('reconnecting', () => {
+    if (down) return;
     down = true;
     logger.warn({ connection, reason }, 'Redis unavailable, reconnecting with backoff');
   });
   redis.on('ready', () => {
+    reason = 'CLOSED';
     if (!down) return;
     down = false;
     logger.info({ connection }, 'Redis connection restored');

@@ -16,7 +16,6 @@ export function createRedis(url: string): Redis {
   return new Redis(url, COMMAND_CLIENT_OPTIONS);
 }
 
-/** A dedicated pub/sub connection with the subscriber retry policy (see `redis-connection.ts`). */
 export function createSubscriberRedis(redis: Redis): Redis {
   return redis.duplicate(SUBSCRIBER_CLIENT_OPTIONS);
 }

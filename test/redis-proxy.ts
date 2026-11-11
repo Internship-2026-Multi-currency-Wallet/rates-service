@@ -1,11 +1,6 @@
 import { createServer, type Server, type Socket, connect } from 'node:net';
 
-/**
- * A TCP proxy in front of the shared test Redis, so a test can take "Redis" down and bring it
- * back on the same endpoint without touching the real server or its data.
- * `stop()` closes the listener and cuts every open connection (like a Redis restart);
- * while stopped the port refuses connections.
- */
+/** A proxy isolates outage simulations from the shared Redis server. */
 export class RedisProxy {
   private server?: Server;
   private readonly sockets = new Set<Socket>();
@@ -15,7 +10,7 @@ export class RedisProxy {
     private readonly target: { host: string; port: number },
   ) {}
 
-  /** Reserves a free local port without listening on it yet. */
+  /** Picks a free port and releases it, so another process could take it before `start()`. */
   static async reserve(targetUrl: string): Promise<RedisProxy> {
     const { hostname, port } = new URL(targetUrl);
     const probe = createServer();

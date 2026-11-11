@@ -5,7 +5,9 @@ import { getLoggerToken, type PinoLogger } from 'nestjs-pino';
 import request from 'supertest';
 import type { App } from 'supertest/types.js';
 import { DiagnosticsModule } from '../src/diagnostics/diagnostics.module.js';
-import { EventPublisher } from '../src/events/event-bus.js';
+import { EventPublisher, redisName } from '../src/events/event-bus.js';
+import { watchRedisConnection } from '../src/redis/redis-connection.js';
+import { createRedis } from '../src/redis/redis.module.js';
 import { createApp } from './create-app.js';
 import { RedisProxy } from './redis-proxy.js';
 import { bearer } from './tokens.js';
@@ -153,5 +155,71 @@ describe('Redis outage (e2e, real Redis behind a controllable proxy)', () => {
       String(args[0]).includes('[ioredis]'),
     );
     expect(ioredisErrors).toEqual([]);
+  });
+});
+
+describe('command client during an outage (e2e, real Redis behind a controllable proxy)', () => {
+  const sharedRedisUrl = process.env.REDIS_URL ?? 'redis://localhost:6379';
+  const channel = redisName('e2e', `late-publish-${process.pid}-${Date.now()}`);
+  let proxy: RedisProxy;
+  let observer: Redis;
+  const delivered: string[] = [];
+  const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+  const quietLogger = () => ({ warn: jest.fn(), debug: jest.fn(), info: jest.fn() });
+
+  beforeAll(async () => {
+    proxy = await RedisProxy.reserve(sharedRedisUrl);
+    observer = new Redis(sharedRedisUrl);
+    await observer.subscribe(channel);
+    observer.on('message', (_channel: string, message: string) => delivered.push(message));
+  });
+
+  afterAll(async () => {
+    await proxy.stop();
+    await observer.quit();
+  });
+
+  it('never sends a publish that failed during the outage, and recovers for later commands', async () => {
+    const client = createRedis(proxy.url); // the app's command-client options
+    client.on('error', () => undefined);
+    let reconnects = 0;
+    client.on('reconnecting', () => reconnects++);
+    try {
+      // Past the first maxRetriesPerRequest flush: an offline queue would now keep the
+      // command until recovery, long after commandTimeout rejected it.
+      while (reconnects < 4) await sleep(20);
+      const started = Date.now();
+      await expect(client.publish(channel, 'during-outage')).rejects.toThrow(/isn't writeable/);
+      expect(Date.now() - started).toBeLessThan(500);
+
+      await proxy.start();
+      await new Promise((resolve) => client.once('ready', resolve));
+      await sleep(300);
+      expect(delivered).toEqual([]);
+
+      await expect(client.publish(channel, 'after-recovery')).resolves.toBe(1);
+      await sleep(200);
+      expect(delivered).toEqual(['after-recovery']);
+    } finally {
+      client.disconnect();
+    }
+  });
+
+  it('does not report QUIT or disconnect() of a ready connection as an outage', async () => {
+    await proxy.start();
+    const closers = [
+      async (c: Redis) => void (await c.quit()),
+      (c: Redis) => Promise.resolve(c.disconnect()),
+    ];
+    for (const close of closers) {
+      const client = createRedis(proxy.url);
+      const logger = quietLogger();
+      watchRedisConnection(client, logger as unknown as PinoLogger, 'command');
+      if (client.status !== 'ready') await new Promise((resolve) => client.once('ready', resolve));
+      await close(client);
+      if (client.status !== 'end') await new Promise((resolve) => client.once('end', resolve));
+      await sleep(100);
+      expect(logger.warn).not.toHaveBeenCalled();
+    }
   });
 });
