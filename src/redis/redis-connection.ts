@@ -8,6 +8,7 @@ export const REDIS_COMMAND_TIMEOUT_MS = 2000;
  * issued while Redis is down fails at once and is never sent later.
  */
 export const COMMAND_CLIENT_OPTIONS: RedisOptions = {
+  // Bound retries for pending commands after a connection loss.
   maxRetriesPerRequest: 3,
   commandTimeout: REDIS_COMMAND_TIMEOUT_MS,
   enableOfflineQueue: false,

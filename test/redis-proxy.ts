@@ -1,6 +1,8 @@
 import { createServer, type Server, type Socket, connect } from 'node:net';
 
-/** A proxy isolates outage simulations from the shared Redis server. */
+/**
+ * Isolates outages from shared Redis; assumes plain Redis without authentication on DB 0.
+ */
 export class RedisProxy {
   private server?: Server;
   private readonly sockets = new Set<Socket>();
