@@ -147,7 +147,6 @@ export class EventSubscriber {
     private readonly onReceived: (name: PubSubEventName) => void = () => undefined,
   ) {}
 
-  /** Resolves once Redis confirms the SUBSCRIBE; on failure the handler is removed again. */
   async subscribe<N extends PubSubEventName>(
     name: N,
     handler: (payload: EventPayloads[N], meta: EventMeta) => void | Promise<void>,

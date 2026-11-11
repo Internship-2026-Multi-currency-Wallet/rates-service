@@ -56,7 +56,6 @@ export class FailOpenThrottlerStorage implements ThrottlerStorage {
     throttlerName: string,
   ): Promise<ThrottlerStorageRecord> {
     if (this.now() < this.skipRedisUntil) return ALLOW;
-    // Fail open instead of issuing a command unless the client is `ready` or has not started connecting (`wait`).
     if (this.redis.status !== 'ready' && this.redis.status !== 'wait') {
       this.warn({ redisStatus: this.redis.status });
       return ALLOW;
