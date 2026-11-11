@@ -63,10 +63,23 @@ export class EventPublisher {
     /** Environment prefix (`APP_ENV`). */
     private readonly prefix: string,
     private readonly context: EventContext = NO_EVENT_CONTEXT,
+    private readonly onPublished: <N extends EventName>(
+      name: N,
+      payload: EventPayloads[N],
+    ) => void = () => undefined,
   ) {}
 
   /** Returns the stream entry id for stream events, `null` for pub/sub events. */
   async publish<N extends EventName>(name: N, payload: EventPayloads[N]): Promise<string | null> {
+    const id = await this.send(name, payload);
+    this.onPublished(name, payload);
+    return id;
+  }
+
+  private async send<N extends EventName>(
+    name: N,
+    payload: EventPayloads[N],
+  ): Promise<string | null> {
     const definition = EVENTS[name];
     const meta: EventMeta = { ...this.context.current(), publishedAt: new Date().toISOString() };
     if (definition.transport === 'pubsub') {
@@ -113,14 +126,20 @@ export function decodePubSubMessage(message: string): PubSubEnvelope {
  */
 export class EventSubscriber {
   private readonly handlers = new Map<string, Set<Handler>>();
+  private readonly names = new Map<string, PubSubEventName>();
   private listening = false;
 
   constructor(
     private readonly connection: Redis,
     /** Environment prefix (`APP_ENV`). */
     private readonly prefix: string,
-    private readonly onError: (error: unknown, channel: string) => void = () => undefined,
+    private readonly onError: (
+      error: unknown,
+      channel: string,
+      name: PubSubEventName,
+    ) => void = () => undefined,
     private readonly context: EventContext = NO_EVENT_CONTEXT,
+    private readonly onReceived: (name: PubSubEventName) => void = () => undefined,
   ) {}
 
   async subscribe<N extends PubSubEventName>(
@@ -133,6 +152,7 @@ export class EventSubscriber {
     if (!set) {
       set = new Set();
       this.handlers.set(channel, set);
+      this.names.set(channel, name);
       await this.connection.subscribe(channel);
     }
     const wrapped = handler as Handler;
@@ -141,6 +161,7 @@ export class EventSubscriber {
       set.delete(wrapped);
       if (set.size === 0) {
         this.handlers.delete(channel);
+        this.names.delete(channel);
         await this.connection.unsubscribe(channel);
       }
     };
@@ -148,6 +169,7 @@ export class EventSubscriber {
 
   async close(): Promise<void> {
     this.handlers.clear();
+    this.names.clear();
     if (this.connection.status === 'ready') await this.connection.quit();
     else this.connection.disconnect();
   }
@@ -157,19 +179,21 @@ export class EventSubscriber {
     this.listening = true;
     this.connection.on('message', (channel: string, message: string) => {
       const handlers = this.handlers.get(channel);
-      if (!handlers) return;
+      const name = this.names.get(channel);
+      if (!handlers || !name) return;
+      this.onReceived(name);
       let envelope: PubSubEnvelope;
       try {
         envelope = decodePubSubMessage(message);
       } catch (error) {
-        this.onError(error, channel);
+        this.onError(error, channel, name);
         return;
       }
       for (const handler of handlers) {
         void this.context.run(envelope.meta, () =>
           Promise.resolve()
             .then(() => handler(envelope.payload, envelope.meta))
-            .catch((error: unknown) => this.onError(error, channel)),
+            .catch((error: unknown) => this.onError(error, channel, name)),
         );
       }
     });

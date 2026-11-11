@@ -57,6 +57,25 @@ describe('EventPublisher', () => {
     });
   });
 
+  it('reports a published event with its payload, and not one that failed', async () => {
+    const onPublished = jest.fn();
+    const ok = { publish: jest.fn(() => Promise.resolve(1)), xadd: jest.fn() };
+    await new EventPublisher(ok as unknown as Redis, 'staging', undefined, onPublished).publish(
+      'rate.tick',
+      tick,
+    );
+    expect(onPublished).toHaveBeenCalledWith('rate.tick', tick);
+
+    const down = { publish: jest.fn(() => Promise.reject(new Error('down'))), xadd: jest.fn() };
+    await expect(
+      new EventPublisher(down as unknown as Redis, 'staging', undefined, onPublished).publish(
+        'rate.tick',
+        tick,
+      ),
+    ).rejects.toThrow('down');
+    expect(onPublished).toHaveBeenCalledTimes(1);
+  });
+
   it('appends stream events with XADD and a capped length', async () => {
     const redis = { publish: jest.fn(), xadd: jest.fn(() => Promise.resolve('1-0')) };
     const publisher = new EventPublisher(redis as unknown as Redis, 'kvitka-uat');
@@ -157,6 +176,28 @@ describe('EventSubscriber', () => {
     expect(metas).toEqual([{ requestId: 'req-42' }]);
   });
 
+  it('reports each received message once, decodable or not, whatever the number of handlers', async () => {
+    const connection = fakeConnection();
+    const onReceived = jest.fn();
+    const subscriber = new EventSubscriber(
+      connection as unknown as Redis,
+      'staging',
+      undefined,
+      undefined,
+      onReceived,
+    );
+    await subscriber.subscribe('rate.tick', () => undefined);
+    await subscriber.subscribe('rate.tick', () => undefined);
+
+    connection.emit('message', 'staging:rate.tick', JSON.stringify(tick));
+    connection.emit('message', 'staging:rate.tick', 'not json');
+    connection.emit('message', 'local:rate.tick', JSON.stringify(tick));
+    await new Promise((resolve) => setImmediate(resolve));
+    expect(onReceived).toHaveBeenCalledTimes(2);
+    expect(onReceived).toHaveBeenNthCalledWith(1, 'rate.tick');
+    expect(onReceived).toHaveBeenNthCalledWith(2, 'rate.tick');
+  });
+
   it('reports bad messages and failing handlers to onError', async () => {
     const connection = fakeConnection();
     const onError = jest.fn();
@@ -169,6 +210,8 @@ describe('EventSubscriber', () => {
     connection.emit('message', 'staging:rate.tick', JSON.stringify(tick));
     await new Promise((resolve) => setImmediate(resolve));
     expect(onError).toHaveBeenCalledTimes(2);
+    expect(onError).toHaveBeenNthCalledWith(1, expect.any(Error), 'staging:rate.tick', 'rate.tick');
+    expect(onError).toHaveBeenNthCalledWith(2, expect.any(Error), 'staging:rate.tick', 'rate.tick');
   });
 });
 
