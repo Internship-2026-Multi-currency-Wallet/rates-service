@@ -65,8 +65,7 @@ export function graphqlOptions(
     if (!metrics) return undefined;
     if (errors.some((error) => !isServerError(error))) {
       metrics.graphqlErrors.inc({
-        operation: UNKNOWN_OPERATION,
-        code: 'GRAPHQL_VALIDATION_FAILED',
+        labels: { operation: UNKNOWN_OPERATION, code: 'GRAPHQL_VALIDATION_FAILED' },
       });
     }
     countGraphqlErrors(
