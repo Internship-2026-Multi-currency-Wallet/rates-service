@@ -3,8 +3,10 @@ import { Global, Inject, Module, type OnApplicationShutdown } from '@nestjs/comm
 import type { Redis } from 'ioredis';
 import { PinoLogger } from 'nestjs-pino';
 import { AppConfig } from '../config/app-config.js';
+import { Metrics } from '../metrics/metrics.js';
 import { watchRedisConnection } from '../redis/redis-connection.js';
 import { createSubscriberRedis, REDIS } from '../redis/redis.module.js';
+import type { RateTickEvent } from './catalog.js';
 import { type EventContext, EventPublisher, EventSubscriber } from './event-bus.js';
 
 /**
@@ -36,22 +38,51 @@ export function loggingEventContext(logger: PinoLogger, service: string): EventC
   providers: [
     {
       provide: EventPublisher,
-      inject: [REDIS, AppConfig, PinoLogger],
-      useFactory: (redis: Redis, config: AppConfig, logger: PinoLogger) =>
-        new EventPublisher(redis, config.appEnv, loggingEventContext(logger, config.serviceName)),
+      inject: [REDIS, AppConfig, PinoLogger, Metrics],
+      useFactory: (redis: Redis, config: AppConfig, logger: PinoLogger, metrics: Metrics) => {
+        const published = metrics.counter({
+          name: 'events_published_total',
+          help: 'Events published, by event type',
+          labelNames: ['type'],
+        });
+        const ticks = metrics.counter({
+          name: 'rate_ticks_published_total',
+          help: 'Rate ticks published, by currency pair',
+          labelNames: ['pair'],
+        });
+        return new EventPublisher(
+          redis,
+          config.appEnv,
+          loggingEventContext(logger, config.serviceName),
+          (name, payload) => {
+            published.inc({ type: name });
+            if (name === 'rate.tick') {
+              const tick = payload as RateTickEvent;
+              ticks.inc({ pair: `${tick.base}/${tick.quote}` });
+            }
+          },
+        );
+      },
     },
     {
       provide: EventSubscriber,
-      inject: [REDIS, AppConfig, PinoLogger],
-      useFactory: (redis: Redis, config: AppConfig, logger: PinoLogger) => {
+      inject: [REDIS, AppConfig, PinoLogger, Metrics],
+      useFactory: (redis: Redis, config: AppConfig, logger: PinoLogger, metrics: Metrics) => {
         logger.setContext('EventSubscriber');
         const connection = createSubscriberRedis(redis);
         watchRedisConnection(connection, logger, 'subscriber');
+        const failed = metrics.counter({
+          name: 'events_failed_total',
+          help: 'Received events that failed to decode or whose handler threw, by event type',
+          labelNames: ['type'],
+        });
         return new EventSubscriber(
           connection,
           config.appEnv,
-          (error, channel) =>
-            logger.error({ err: error, channel }, `Handler for "${channel}" failed`),
+          (error, channel, name) => {
+            failed.inc({ type: name });
+            logger.error({ err: error, channel }, `Handler for "${channel}" failed`);
+          },
           loggingEventContext(logger, config.serviceName),
         );
       },

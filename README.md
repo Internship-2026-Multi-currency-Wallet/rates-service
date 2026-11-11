@@ -80,19 +80,24 @@ curl -s localhost:3001/graphql -H 'content-type: application/json' \
 Validated at startup (`src/config/env.schema.ts`); an invalid value stops the service with a clear message.
 See `.env.example`.
 
-| Variable       | Default                                                          | Meaning                                                                              |
-| -------------- | ---------------------------------------------------------------- | ------------------------------------------------------------------------------------ |
-| `PORT`         | `3001`                                                           | HTTP port                                                                            |
-| `NODE_ENV`     | `development`                                                    | `production` disables writing `schema.graphql`                                       |
-| `APP_ENV`      | `local`                                                          | Environment: `local`, `staging`, `kvitka-uat`, `wisla-uat`. Prefix of all Redis keys |
-| `DATABASE_URL` | `mysql://wallet:wallet@localhost:3306/rates_service`             | MySQL database of this service                                                       |
-| `REDIS_URL`    | `redis://localhost:6379`                                         | Redis for events                                                                     |
-| `CLIENT`       | `demo`                                                           | Client this deployment serves: `demo`, `kvitka`, `wisla`                             |
-| `CORS_ORIGINS` | `http://localhost:5173,http://localhost:5174`                    | Allowed browser origins                                                              |
-| `APP_VERSION`  | from `package.json`                                              | Version reported by `health`                                                         |
-| `LOG_LEVEL`    | `info`                                                           | Log level: `fatal`, `error`, `warn`, `info`, `debug`, `trace`, `silent`              |
-| `JWT_ISSUER`   | `wallet-core`                                                    | Expected issuer of the access tokens                                                 |
-| `JWT_SECRET`   | `local-only-jwt-secret-change-me-0123456789` (not in production) | HS256 secret shared with wallet-core. Required when `NODE_ENV=production`            |
+| Variable                   | Default                                                          | Meaning                                                                              |
+| -------------------------- | ---------------------------------------------------------------- | ------------------------------------------------------------------------------------ |
+| `PORT`                     | `3001`                                                           | HTTP port                                                                            |
+| `METRICS_PORT`             | `9464`                                                           | Internal port of `GET /metrics` (see [Metrics](#metrics)). Must differ from `PORT`   |
+| `METRICS_HOST`             | `127.0.0.1` (Docker image: `0.0.0.0`)                            | Address `GET /metrics` listens on                                                    |
+| `NODE_ENV`                 | `development`                                                    | `production` disables writing `schema.graphql`                                       |
+| `APP_ENV`                  | `local`                                                          | Environment: `local`, `staging`, `kvitka-uat`, `wisla-uat`. Prefix of all Redis keys |
+| `DATABASE_URL`             | `mysql://wallet:wallet@localhost:3306/rates_service`             | MySQL database of this service                                                       |
+| `REDIS_URL`                | `redis://localhost:6379`                                         | Redis for events                                                                     |
+| `CLIENT`                   | `demo`                                                           | Client this deployment serves: `demo`, `kvitka`, `wisla`                             |
+| `CORS_ORIGINS`             | `http://localhost:5173,http://localhost:5174`                    | Allowed browser origins                                                              |
+| `APP_VERSION`              | from `package.json`                                              | Version reported by `health`                                                         |
+| `LOG_LEVEL`                | `info`                                                           | Log level: `fatal`, `error`, `warn`, `info`, `debug`, `trace`, `silent`              |
+| `JWT_ISSUER`               | `wallet-core`                                                    | Expected issuer of the access tokens                                                 |
+| `JWT_SECRET`               | `local-only-jwt-secret-change-me-0123456789` (not in production) | HS256 secret shared with wallet-core. Required when `NODE_ENV=production`            |
+| `THROTTLE_TTL_SECONDS`     | `60`                                                             | Length of the rate-limit window, in seconds                                          |
+| `THROTTLE_LIMIT_ANONYMOUS` | `120`                                                            | Requests per window without a token (counted per client IP)                          |
+| `THROTTLE_LIMIT_USER`      | `600`                                                            | Requests per window for a logged-in user or staff member (counted per id)            |
 
 ## GraphQL contract
 
@@ -127,6 +132,69 @@ client.subscribe(
 
 The implementation is in `src/server-time/`; the e2e test `test/server-time.e2e-spec.ts` covers it.
 
+## Rate limits
+
+Every request that reaches a resolver or a controller is counted against a key, and once the limit is reached
+further requests are refused until the window ends. The global guard lives in `src/throttling` (`@nestjs/throttler`
+with our own Redis storage). It runs after `AuthGuard`, so it knows who the caller is.
+
+| Caller          | Key              | Default limit per window |
+| --------------- | ---------------- | ------------------------ |
+| Not logged in   | `ip:<client IP>` | 120                      |
+| Logged-in user  | `user:<id>`      | 600                      |
+| Logged-in staff | `staff:<id>`     | 600                      |
+
+The window is 60 seconds. Limits and window come from `THROTTLE_LIMIT_ANONYMOUS`, `THROTTLE_LIMIT_USER` and
+`THROTTLE_TTL_SECONDS` (see the environment variables above). To change a limit on an environment, set the variable
+there (the mentor does it in Dokploy) and redeploy.
+
+- **Fixed window.** The first request starts the window. Once the limit is exceeded, requests are refused until that
+  window ends: limit hit at 0:10 of a 60 s window means refused until 1:00, not until 1:10. `Retry-After` is the
+  number of seconds left in the window.
+- **One HTTP request counts once**, however many top-level fields a GraphQL request has.
+- **Shared and per service.** Counters live in Redis under `<APP_ENV>:throttle:<service>:<key>` (e.g.
+  `staging:throttle:rates-service:user:42`), so all instances of a service share them and they survive a restart.
+  The service name in the key makes each service count on its own, although all backends share one Redis.
+- **Client IP.** Express trusts one proxy hop (`trust proxy = 1`, `src/configure-app.ts`, because Traefik is the
+  only proxy), so the IP is the last `X-Forwarded-For` entry. A client cannot invent a new IP by adding entries.
+- **Not counted:** `GET /health` (the controller is marked `@SkipThrottle()`) and everything that arrives over the
+  WebSocket (subscriptions). The GraphQL query `health` is counted like any other query. `GET /metrics` is served
+  on its own port (see [Metrics](#metrics)) and never reaches the guard.
+- **Known limits (follow-ups):** a guard runs only when a resolver or controller is about to be called, so these
+  requests are not counted: refused by `AuthGuard` (401) or `PermissionGuard` (403), GraphQL introspection
+  (`__schema`, `__type`), and GraphQL documents that cannot be parsed or fail validation. Server-to-server calls are
+  not exempt: when wallet-core starts calling this service (it does not yet), its calls are counted like any other
+  caller's (`ip:<wallet-core IP>` without a token, `user:` / `staff:` if it forwards one). An exemption belongs
+  with the real rates client.
+- **Logging.** Only the first refused request of a caller in a window is logged (`request throttled`), so a flood of
+  refused requests does not flood the logs.
+- **Redis down or still connecting** (e.g. right after startup). Requests pass without a limit and a warning is
+  logged at most once a minute. The `X-RateLimit-*` headers then show a full budget and mean nothing.
+- An allowed response carries `X-RateLimit-Limit`, `X-RateLimit-Remaining` and `X-RateLimit-Reset` (seconds left);
+  a refused one carries `Retry-After`.
+
+### Error format (the contract for frontends)
+
+GraphQL (the HTTP status stays 200, as for any GraphQL error):
+
+```json
+{
+  "errors": [
+    {
+      "message": "Too many requests, try again later",
+      "extensions": { "code": "TOO_MANY_REQUESTS", "retryAfterSeconds": 42 }
+    }
+  ]
+}
+```
+
+REST: status `429` and the header `Retry-After: 42`. In both cases the number is the seconds until the window ends;
+wait that long before retrying.
+
+| Code                | When                        | Extra fields        |
+| ------------------- | --------------------------- | ------------------- |
+| `TOO_MANY_REQUESTS` | the limit of the key is hit | `retryAfterSeconds` |
+
 ## Logging
 
 Structured JSON logs via [`nestjs-pino`](https://github.com/iamolegga/nestjs-pino) (`src/logging/`). One line per
@@ -154,6 +222,57 @@ this.logger.error({ err, conversionId }, 'conversion failed'); // pass errors as
   request objects on purpose.
 - **`LOG_LEVEL`**: `fatal`, `error`, `warn`, `info` (default), `debug`, `trace`, `silent` (e2e tests default to `silent`).
 - Do not use `console.*` or `new Logger()` from `@nestjs/common` in application code.
+
+## Metrics
+
+Prometheus metrics via [`prom-client`](https://github.com/siimon/prom-client) (`src/metrics/`, the same module as in
+wallet-core). Alloy scrapes them every 15 s and Grafana shows them on the _Server_ and _Services_ dashboards (see the
+handbook's `metrics.md`).
+
+- **Where**: `GET /metrics` on its own small HTTP server on `METRICS_PORT` (default `9464`), not on `PORT`;
+  `GET /metrics` on the app port is a 404. If the port is busy, the service starts anyway and logs an error. Running
+  several backends from source, give each its own port (`METRICS_PORT=9465 npm run start:dev`).
+- **Who can reach it**: run directly on a machine, the server listens on `127.0.0.1` only (`METRICS_HOST`). The
+  Docker image sets `METRICS_HOST=0.0.0.0`: the port is not published, so only containers on the same Docker
+  network (Alloy, on the server: other apps on `dokploy-network`) reach it, never the internet. Traefik routes the
+  public domain to `PORT` only. Metrics carry no ids, amounts or secrets.
+- **Labels on every series**: `service` (`rates-service`) and `env` (`APP_ENV`).
+
+| Metric                          | Type      | Labels              | Meaning                                                                     |
+| ------------------------------- | --------- | ------------------- | --------------------------------------------------------------------------- |
+| `http_requests_total`           | counter   | `operation, status` | HTTP requests, except `/health`, `/metrics` and CORS preflights             |
+| `http_request_duration_seconds` | histogram | `operation`         | Request duration; buckets 5 ms … 10 s                                       |
+| `graphql_errors_total`          | counter   | `operation, code`   | Failed GraphQL requests by the error code the client sees (once per code)   |
+| `graphql_ws_connections`        | gauge     | —                   | Open GraphQL websocket connections                                          |
+| `events_published_total`        | counter   | `type`              | Events published through `EventPublisher`                                   |
+| `events_failed_total`           | counter   | `type`              | Received events that failed to decode, or whose handler threw (per handler) |
+| `rate_ticks_published_total`    | counter   | `pair`              | Rate ticks published (`rate.tick`), by currency pair, e.g. `USD/UAH`        |
+| `process_*`, `nodejs_*`         | default   | —                   | CPU, memory, heap, event-loop lag, GC, start time (prom-client defaults)    |
+
+- **`operation`**: the operation type and its first root field (`query me`), or the route of a REST request
+  (`POST /diagnostics/ping`). The client's own operation name is not used, because any client can invent names and
+  every new one would be a new time series. Unparsable GraphQL, requests that matched no route and anything past the
+  cap of 100 distinct values go into one bucket, `(unknown)`.
+- **Websocket operations**: they add to `graphql_errors_total` but not to `http_requests_total`. Errors raised before
+  execution (parse and validation) are all `GRAPHQL_VALIDATION_FAILED` under `(unknown)`; over HTTP a parse error is
+  `GRAPHQL_PARSE_FAILED` instead.
+- **Adding a metric**: inject `Metrics` and create it once, in the constructor or factory, with bounded labels only:
+
+```ts
+constructor(@Inject(Metrics) metrics: Metrics) {
+  this.ticks = metrics.counter({
+    name: 'rate_ticks_published_total',
+    help: 'Rate ticks published, by currency pair',
+    labelNames: ['pair'],
+  });
+}
+
+this.ticks.inc({ pair: `${tick.base}/${tick.quote}` });
+```
+
+- **Label rules**: every distinct label value is a new time series in Prometheus. Never use user ids, request ids,
+  amounts, emails or free text as label values; those belong in logs.
+- **Check locally**: `curl localhost:9464/metrics`.
 
 ## Seams
 
@@ -221,6 +340,8 @@ The client customization module (hooks, client-only endpoints) is a separate tas
 
 ### Events — `src/events`
 
+An in-flight command may be resent after reconnect; a timeout does not prove non-delivery.
+
 `catalog.ts` is the typed contract for Redis events, **identical in all three backends**:
 
 | Event                  | Transport                       | Name                          |
@@ -250,10 +371,12 @@ src/
   settings/      ClientSettingsService (defaults from config/settings.defaults.yaml)
   events/        event catalog + publisher/subscriber
   health/        GET /health and `health` query
+  throttling/    global rate limit (guard + Redis storage), see Rate limits
   server-time/   example subscription `serverTime`
   config/        env validation + AppConfig
   database/      Knex (KNEX token)    redis/   ioredis (REDIS token)
   graphql/       Apollo options
+  metrics/       Prometheus registry, request metrics, GET /metrics on METRICS_PORT
 migrations/      Knex migrations (timestamped)
 test/            e2e tests
 schema.graphql   generated GraphQL contract (committed)

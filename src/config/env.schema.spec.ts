@@ -60,6 +60,44 @@ describe('validateEnv', () => {
   it('no longer knows DEV_AUTH', () => {
     expect(validateEnv({ ...required, DEV_AUTH: 'true' })).not.toHaveProperty('DEV_AUTH');
   });
+  it('allows METRICS_PORT=0 only in tests', () => {
+    expect(validateEnv({ ...required, NODE_ENV: 'test', METRICS_PORT: '0' }).METRICS_PORT).toBe(0);
+    expect(() => validateEnv({ ...required, NODE_ENV: 'production', METRICS_PORT: '0' })).toThrow(
+      /METRICS_PORT/,
+    );
+    expect(() => validateEnv({ ...required, METRICS_PORT: '0' })).toThrow(/METRICS_PORT/);
+  });
+
+  it('refuses a METRICS_PORT equal to PORT', () => {
+    expect(validateEnv(required).METRICS_PORT).toBe(9464);
+    expect(() => validateEnv({ ...required, PORT: '9464' })).toThrow(/METRICS_PORT/);
+  });
+});
+
+describe('validateEnv: throttling', () => {
+  const NAMES = [
+    'THROTTLE_TTL_SECONDS',
+    'THROTTLE_LIMIT_ANONYMOUS',
+    'THROTTLE_LIMIT_USER',
+  ] as const;
+
+  it('defaults to a 60 second window, 120 anonymous and 600 user requests', () => {
+    expect(validateEnv(required)).toMatchObject({
+      THROTTLE_TTL_SECONDS: 60,
+      THROTTLE_LIMIT_ANONYMOUS: 120,
+      THROTTLE_LIMIT_USER: 600,
+    });
+  });
+
+  it.each(NAMES)('parses %s from a string', (name) => {
+    expect(validateEnv({ ...required, [name]: '30' })[name]).toBe(30);
+  });
+
+  describe.each(NAMES)('%s', (name) => {
+    it.each(['0', '-1', '1.5', 'abc'])('rejects %p', (value) => {
+      expect(() => validateEnv({ ...required, [name]: value })).toThrow(new RegExp(name));
+    });
+  });
 });
 
 describe('AppConfig', () => {
@@ -77,6 +115,14 @@ describe('AppConfig', () => {
     expect(AppConfig.fromEnv(required).jwt).toEqual({
       issuer: 'wallet-core',
       secret: required.JWT_SECRET,
+    });
+  });
+
+  it('groups the rate-limit settings', () => {
+    expect(AppConfig.fromEnv({ ...required, THROTTLE_LIMIT_USER: '50' }).throttle).toEqual({
+      ttlSeconds: 60,
+      limitAnonymous: 120,
+      limitUser: 50,
     });
   });
 });

@@ -26,6 +26,8 @@ export class AppConfig {
   /** Environment (`APP_ENV`): local, staging, kvitka-uat, wisla-uat. Prefix of all Redis keys. */
   readonly appEnv: AppEnv;
   readonly port: number;
+  readonly metricsPort: number;
+  readonly metricsHost: string;
   readonly databaseUrl: string;
   readonly redisUrl: string;
   /** The client this deployment serves (`CLIENT` env). */
@@ -37,12 +39,15 @@ export class AppConfig {
     issuer: string;
     secret: string;
   };
+  readonly throttle: { ttlSeconds: number; limitAnonymous: number; limitUser: number };
 
   constructor(env: Env) {
     this.version = env.APP_VERSION ?? readPackageVersion();
     this.nodeEnv = env.NODE_ENV;
     this.appEnv = env.APP_ENV;
     this.port = env.PORT;
+    this.metricsPort = env.METRICS_PORT;
+    this.metricsHost = env.METRICS_HOST;
     this.databaseUrl = env.DATABASE_URL;
     this.redisUrl = env.REDIS_URL;
     this.client = env.CLIENT;
@@ -53,6 +58,11 @@ export class AppConfig {
     this.jwt = {
       issuer: env.JWT_ISSUER,
       secret: env.JWT_SECRET,
+    };
+    this.throttle = {
+      ttlSeconds: env.THROTTLE_TTL_SECONDS,
+      limitAnonymous: env.THROTTLE_LIMIT_ANONYMOUS,
+      limitUser: env.THROTTLE_LIMIT_USER,
     };
   }
 

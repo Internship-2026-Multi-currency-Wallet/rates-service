@@ -11,9 +11,12 @@ import { EventsModule } from './events/events.module.js';
 import { graphqlOptions } from './graphql/graphql.config.js';
 import { HealthModule } from './health/health.module.js';
 import { LoggingModule } from './logging/logging.module.js';
+import { Metrics } from './metrics/metrics.js';
+import { MetricsModule } from './metrics/metrics.module.js';
 import { RedisModule } from './redis/redis.module.js';
 import { ServerTimeModule } from './server-time/server-time.module.js';
 import { ClientSettingsModule } from './settings/client-settings.module.js';
+import { ThrottlingModule } from './throttling/throttling.module.js';
 
 /**
  * Root module. Shared file: change it only in small, dedicated PRs.
@@ -24,16 +27,19 @@ import { ClientSettingsModule } from './settings/client-settings.module.js';
     // Infrastructure
     ConfigModule,
     LoggingModule,
+    MetricsModule,
     DatabaseModule,
     RedisModule,
     EventsModule,
     GraphQLModule.forRootAsync<ApolloDriverConfig>({
       driver: ApolloDriver,
-      inject: [AppConfig, PinoLogger],
+      inject: [AppConfig, PinoLogger, Metrics],
       useFactory: graphqlOptions,
     }),
     // Seams
     AuthModule,
+    // After AuthModule: global guards run in module order, and the throttler needs req.user.
+    ThrottlingModule,
     ClientSettingsModule,
     // Features
     HealthModule,
