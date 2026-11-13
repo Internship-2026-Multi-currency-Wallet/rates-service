@@ -47,13 +47,19 @@ function formatOriginal(
 /**
  * graphql-ws `onNext`: the same `formatError` for results sent over the websocket (any operation
  * can go there, not only subscriptions), which Apollo's `formatError` does not see. Returning
- * nothing sends the result unchanged.
+ * nothing sends the result unchanged. Pathless errors are the client's variable coercion failures,
+ * sent as they are.
  */
 export function formatExecutionResult(
   result: ExecutionResult,
 ): FormattedExecutionResult | undefined {
   if (!result.errors) return undefined;
-  return { ...result, errors: result.errors.map((error) => formatError(error.toJSON(), error)) };
+  return {
+    ...result,
+    errors: result.errors.map((error) =>
+      error.path === undefined ? error.toJSON() : formatError(error.toJSON(), error),
+    ),
+  };
 }
 
 /**

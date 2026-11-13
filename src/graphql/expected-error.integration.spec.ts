@@ -12,7 +12,7 @@ import {
   UseGuards,
 } from '@nestjs/common';
 import type { ApolloDriverConfig } from '@nestjs/apollo';
-import { GraphQLModule, Query, Resolver, Subscription } from '@nestjs/graphql';
+import { Args, GraphQLModule, Query, Resolver, Subscription } from '@nestjs/graphql';
 import { Test } from '@nestjs/testing';
 import { GraphQLError } from 'graphql';
 import { createClient, type FormattedExecutionResult } from 'graphql-ws';
@@ -133,6 +133,12 @@ class ProbeResolver {
   @Query(() => Boolean)
   crash(): boolean {
     throw new Error(LEAK);
+  }
+
+  /** Never reached with a bad variable: graphql-js rejects it before execution, without a path. */
+  @Query(() => Boolean)
+  variableProbe(@Args('flag') flag: boolean): boolean {
+    return flag;
   }
 
   /** A status alone (e.g. from a downstream HTTP client) does not make a Nest exception. */
@@ -686,6 +692,44 @@ describe('GraphQL error logging in Nest + Apollo', () => {
       expect(err.message).toBe('ticker broke');
       expect(err.stack).toContain('ProbeResolver.flaky');
       expect(nestErrors).toEqual([]);
+    });
+
+    /** The `graphql_errors_total` value of one operation and code. */
+    async function errorCount(operation: string, code: string): Promise<number> {
+      const { values } = await metrics.graphqlErrors.get();
+      return (
+        values.find((v) => v.labels.operation === operation && v.labels.code === code)?.value ?? 0
+      );
+    }
+
+    it.each([
+      [
+        'a missing required variable',
+        undefined,
+        'Variable "$flag" of required type "Boolean!" was not provided.',
+      ],
+      [
+        'a variable of an invalid type',
+        { flag: 'yes' },
+        'Variable "$flag" got invalid value "yes"; Boolean cannot represent a non boolean value: "yes"',
+      ],
+    ])('sends %s back as the client error it is, not masked', async (_case, variables, message) => {
+      const requestId = `e1-17-ws-variable-${variables ? 'invalid' : 'missing'}`;
+      // What the client sees has no code, so it is counted as INTERNAL_SERVER_ERROR, as on main.
+      const before = await errorCount('query variableProbe', 'INTERNAL_SERVER_ERROR');
+      const { results, failure, warns, wsErrors, nestErrors } = await runWs(
+        'query V($flag: Boolean!) { variableProbe(flag: $flag) }',
+        requestId,
+        variables,
+      );
+
+      expect(failure).toBeUndefined();
+      expect(results).toEqual([{ errors: [{ message, locations: expect.any(Array) }] }]);
+      expect(JSON.stringify(results)).not.toContain('Internal server error');
+      expect(warns).toEqual([]);
+      expect(wsErrors).toEqual([]);
+      expect(nestErrors).toEqual([]);
+      expect(await errorCount('query variableProbe', 'INTERNAL_SERVER_ERROR')).toBe(before + 1);
     });
 
     it.each([

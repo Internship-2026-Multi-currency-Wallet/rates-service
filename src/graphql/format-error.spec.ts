@@ -93,6 +93,22 @@ describe('formatExecutionResult', () => {
       errors: [expected.toJSON(), { ...MASKED, path: ['rate'] }],
     });
   });
+
+  it('sends a pathless variable error as it is, keeps extensions and leaves the result unchanged', () => {
+    const variable = new GraphQLError(
+      'Variable "$flag" of required type "Boolean!" was not provided.',
+    );
+    const unexpected = thrownInResolver(new Error('private detail'));
+    const result = { errors: [variable, unexpected], extensions: { cost: 1 } };
+    const snapshot = JSON.stringify(result.errors);
+
+    expect(formatExecutionResult(result)).toEqual({
+      errors: [variable.toJSON(), { ...MASKED, path: ['rate'] }],
+      extensions: { cost: 1 },
+    });
+    expect(result.errors[0]).toBe(variable);
+    expect(JSON.stringify(result.errors)).toBe(snapshot);
+  });
 });
 
 describe('formatProtocolErrors', () => {
