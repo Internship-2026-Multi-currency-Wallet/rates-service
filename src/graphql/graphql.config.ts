@@ -1,18 +1,29 @@
 import { join } from 'node:path';
+import { unwrapResolverError } from '@apollo/server/errors';
 import { ApolloDriver, type ApolloDriverConfig } from '@nestjs/apollo';
 import type { Response } from 'express';
-import { type DocumentNode, type GraphQLError, parse } from 'graphql';
+import { type DocumentNode, type GraphQLError, type GraphQLFormattedError, parse } from 'graphql';
 import type { PinoLogger } from 'nestjs-pino';
 import { AppConfig } from '../config/app-config.js';
 import { type RequestLike, requestFromConnectionParams } from '../auth/request-context.js';
-import { graphqlLoggingPlugin, subscriptionLoggingHooks } from '../logging/graphql-logging.js';
+import {
+  graphqlLoggingPlugin,
+  logWsErrors,
+  subscriptionLoggingHooks,
+  type WsContext,
+} from '../logging/graphql-logging.js';
 import { type Metrics, UNKNOWN_OPERATION } from '../metrics/metrics.js';
 import {
   countGraphqlErrors,
   graphqlMetricsPlugin,
   wsOperationName,
 } from '../metrics/request-metrics.js';
-import { ThrottleErrorCode } from '../throttling/throttle-errors.js';
+import {
+  formatError,
+  formatExecutionResult,
+  formatProtocolErrors,
+  serverProtocolOriginal,
+} from './format-error.js';
 
 /** Path of the committed GraphQL contract. Other repositories consume this file. */
 export const SCHEMA_FILE = join(process.cwd(), 'schema.graphql');
@@ -23,8 +34,6 @@ interface ContextInput {
   connectionParams?: Record<string, unknown>;
   extra?: { request?: unknown };
 }
-
-const CLIENT_ERROR_CODES = Object.values(ThrottleErrorCode);
 
 export interface GraphqlContext {
   req: RequestLike;
@@ -40,10 +49,6 @@ function parseQuery(query: string | undefined): DocumentNode | undefined {
   }
 }
 
-function isServerError(error: GraphQLError): boolean {
-  return Boolean(error.originalError ?? (error as { cause?: unknown }).cause);
-}
-
 /**
  * Apollo, code-first. Outside production the schema is written to `schema.graphql`
  * (sorted, so diffs are stable) — commit it together with resolver changes.
@@ -57,24 +62,29 @@ export function graphqlOptions(
   const wsLogging = subscriptionLoggingHooks(logger);
   const countedSockets = new WeakSet<object>();
   const onProtocolError = (
-    _ctx: unknown,
+    ctx: WsContext,
     _id: string,
     payload: { query?: string; operationName?: string | null },
     errors: readonly GraphQLError[],
-  ): undefined => {
-    if (!metrics) return undefined;
-    if (errors.some((error) => !isServerError(error))) {
-      metrics.graphqlErrors.inc({
-        operation: UNKNOWN_OPERATION,
-        code: 'GRAPHQL_VALIDATION_FAILED',
-      });
+  ): GraphQLFormattedError[] | undefined => {
+    logWsErrors(logger, ctx, errors, serverProtocolOriginal);
+    const formatted = formatProtocolErrors(errors);
+    const fromServer = formatted.filter((item) => !item.fromClient).map((item) => item.error);
+    if (metrics) {
+      if (formatted.some((item) => item.fromClient)) {
+        metrics.graphqlErrors.inc({
+          operation: UNKNOWN_OPERATION,
+          code: 'GRAPHQL_VALIDATION_FAILED',
+        });
+      }
+      countGraphqlErrors(
+        metrics,
+        wsOperationName(parseQuery(payload.query), payload.operationName),
+        fromServer,
+      );
     }
-    countGraphqlErrors(
-      metrics,
-      wsOperationName(parseQuery(payload.query), payload.operationName),
-      errors.filter(isServerError),
-    );
-    return undefined;
+    // Only client validation errors: graphql-ws sends them unchanged.
+    return fromServer.length ? formatted.map((item) => item.error) : undefined;
   };
   return {
     driver: ApolloDriver,
@@ -98,24 +108,29 @@ export function graphqlOptions(
         onClose: (ctx) => {
           if (countedSockets.delete(ctx)) metrics?.graphqlWsConnections.dec();
         },
-        onNext: (_ctx, _id, _payload, args, result) => {
+        // Apollo's formatError does not see websocket results: mask them the same way.
+        onNext: (ctx, _id, _payload, args, result) => {
+          // Execution errors carry a path; pathless ones are the client's variable errors.
+          logWsErrors(logger, ctx, result.errors, (error) =>
+            error.path !== undefined ? unwrapResolverError(error) : undefined,
+          );
+          const formatted = formatExecutionResult(result);
           if (metrics) {
             countGraphqlErrors(
               metrics,
               wsOperationName(args.document, args.operationName),
-              result.errors,
+              (formatted ?? result).errors,
             );
           }
-          return undefined;
+          return formatted;
         },
         ...{ onError: onProtocolError },
       },
     },
     // Names the operation in the access log and logs resolver errors with the requestId.
-    plugins: [
-      graphqlLoggingPlugin({ clientErrorCodes: CLIENT_ERROR_CODES }),
-      ...(metrics ? [graphqlMetricsPlugin(metrics)] : []),
-    ],
+    plugins: [graphqlLoggingPlugin(), ...(metrics ? [graphqlMetricsPlugin(metrics)] : [])],
+    // Unexpected errors reach the client as a bare INTERNAL_SERVER_ERROR (no internals).
+    formatError,
     // HTTP requests carry headers; websocket requests carry connectionParams.
     // Both end up as `context.req.headers`, which the auth guard reads.
     context: ({ req, res, connectionParams }: ContextInput): GraphqlContext => ({
