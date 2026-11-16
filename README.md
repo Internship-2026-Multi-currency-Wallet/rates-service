@@ -175,6 +175,9 @@ there (the mentor does it in Dokploy) and redeploy.
 
 ### Error format (the contract for frontends)
 
+Unexpected GraphQL failures over HTTP and WebSocket are masked as `Internal server error` with code
+`INTERNAL_SERVER_ERROR`. Expected business errors retain their message, code and contract fields.
+
 GraphQL (the HTTP status stays 200, as for any GraphQL error):
 
 ```json
