@@ -212,6 +212,8 @@ describe('GraphQL error logging in Nest + Apollo', () => {
       info: record('info'),
       warn: record('warn'),
       error: record('error'),
+      // The logging context is covered by ws-refusal.integration.spec.ts.
+      runInContext: (fn: () => unknown) => fn(),
     } as unknown as PinoLogger;
 
     @Module({
@@ -626,19 +628,54 @@ describe('GraphQL error logging in Nest + Apollo', () => {
       expect(await countedCodes('subscription downstream401')).toEqual(['INTERNAL_SERVER_ERROR']);
     });
 
-    it('keeps an actual Nest 4xx exception from a stream unlogged, as before', async () => {
-      const requestId = 'e1-17-ws-unauthorized-stream';
-      const { results, failure, warns, wsErrors, nestErrors } = await runWs(
+    it.each([
+      [
+        'from a stream: no path',
         'subscription Unauthorized { unauthorizedStream }',
-        requestId,
-      );
+        undefined,
+        {
+          results: [{ data: { unauthorizedStream: true } }],
+          failure: [{ message: 'Unauthorized' }],
+        },
+      ],
+      [
+        'from a resolver',
+        'query Probe { unauthorized }',
+        'unauthorized',
+        {
+          results: [
+            {
+              data: null,
+              errors: [
+                {
+                  message: 'Unauthorized',
+                  locations: expect.any(Array),
+                  path: ['unauthorized'],
+                },
+              ],
+            },
+          ],
+          failure: undefined,
+        },
+      ],
+    ])(
+      'logs an actual Nest 4xx exception %s as one HTTP_401 warn, response unchanged',
+      async (_case, query, path, response) => {
+        const requestId = `e1-18-ws-4xx-${query.length}`;
+        const { results, failure, warns, wsErrors, nestErrors } = await runWs(query, requestId);
 
-      expect(results).toEqual([{ data: { unauthorizedStream: true } }]);
-      expect(failure).toEqual([{ message: 'Unauthorized' }]);
-      expect(warns).toEqual([]);
-      expect(wsErrors).toEqual([]);
-      expect(nestErrors).toEqual([]);
-    });
+        expect({ results, failure }).toEqual(response);
+        expect(warns).toEqual([
+          {
+            level: 'warn',
+            fields: { requestId, code: 'HTTP_401', path },
+            msg: 'GraphQL error: Unauthorized',
+          },
+        ]);
+        expect(wsErrors).toEqual([]);
+        expect(nestErrors).toEqual([]);
+      },
+    );
 
     it('keeps a stream failure from a coded GraphQLError with its own path and cause, not unwrapped', async () => {
       const requestId = 'e1-17-ws-located-coded';
@@ -739,7 +776,6 @@ describe('GraphQL error logging in Nest + Apollo', () => {
         'query V($b: Boolean!) { __typename @include(if: $b) }',
         { b: 'yes' },
       ],
-      ['a Nest 4xx exception', 'query Probe { unauthorized }', undefined],
     ])('does not log %s from the client', async (_case, query, variables) => {
       const requestId = `e1-17-ws-client-${query.length}`;
       const { results, failure, warns, wsErrors } = await runWs(query, requestId, variables);

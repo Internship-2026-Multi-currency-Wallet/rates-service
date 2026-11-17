@@ -2,15 +2,24 @@ import { join } from 'node:path';
 import { unwrapResolverError } from '@apollo/server/errors';
 import { ApolloDriver, type ApolloDriverConfig } from '@nestjs/apollo';
 import type { Response } from 'express';
-import { type DocumentNode, type GraphQLError, type GraphQLFormattedError, parse } from 'graphql';
+import {
+  type DocumentNode,
+  execute,
+  type GraphQLError,
+  type GraphQLFormattedError,
+  parse,
+  subscribe,
+} from 'graphql';
 import type { PinoLogger } from 'nestjs-pino';
 import { AppConfig } from '../config/app-config.js';
 import { type RequestLike, requestFromConnectionParams } from '../auth/request-context.js';
 import {
   graphqlLoggingPlugin,
+  inWsLoggingContext,
   logWsErrors,
   subscriptionLoggingHooks,
   type WsContext,
+  wsRequestId,
 } from '../logging/graphql-logging.js';
 import { type Metrics, UNKNOWN_OPERATION } from '../metrics/metrics.js';
 import {
@@ -39,6 +48,8 @@ export interface GraphqlContext {
   req: RequestLike;
   /** Absent over websocket. */
   res?: Response;
+  /** Websocket only: the connection's requestId, bound to the operation's logs. */
+  requestId?: string;
 }
 
 function parseQuery(query: string | undefined): DocumentNode | undefined {
@@ -123,18 +134,26 @@ export function graphqlOptions(
           }
           return formatted;
         },
-        ...{ onError: onProtocolError },
+        // Nest's config type omits these but passes every option on to graphql-ws, so this works;
+        // the spread keeps the type check from rejecting it.
+        ...{
+          onError: onProtocolError,
+          execute: inWsLoggingContext(logger, execute),
+          subscribe: inWsLoggingContext(logger, subscribe),
+        },
       },
     },
     // Names the operation in the access log and logs resolver errors with the requestId.
     plugins: [graphqlLoggingPlugin(), ...(metrics ? [graphqlMetricsPlugin(metrics)] : [])],
     // Unexpected errors reach the client as a bare INTERNAL_SERVER_ERROR (no internals).
     formatError,
-    // HTTP requests carry headers; websocket requests carry connectionParams.
-    // Both end up as `context.req.headers`, which the auth guard reads.
-    context: ({ req, res, connectionParams }: ContextInput): GraphqlContext => ({
-      req: req ?? requestFromConnectionParams(connectionParams),
-      res,
-    }),
+    // graphql-ws supplies connectionParams and extra rather than an HTTP req.
+    context: ({ req, res, connectionParams, extra }: ContextInput): GraphqlContext =>
+      req
+        ? { req, res }
+        : {
+            req: requestFromConnectionParams(connectionParams),
+            requestId: wsRequestId({ connectionParams, extra }),
+          },
   };
 }
