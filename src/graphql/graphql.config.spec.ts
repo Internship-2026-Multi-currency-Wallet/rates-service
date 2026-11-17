@@ -1,11 +1,31 @@
 import { beforeEach, jest } from '@jest/globals';
+import type { Response } from 'express';
 import { GraphQLError } from 'graphql';
 import type { PinoLogger } from 'nestjs-pino';
 import { AppConfig } from '../config/app-config.js';
 import { Metrics } from '../metrics/metrics.js';
-import { graphqlOptions } from './graphql.config.js';
+import { type GraphqlContext, graphqlOptions } from './graphql.config.js';
 
 const logger = { setContext: jest.fn(), debug: jest.fn(), warn: jest.fn(), error: jest.fn() };
+
+describe('graphqlOptions context', () => {
+  const context = graphqlOptions(AppConfig.fromEnv({}), logger as unknown as PinoLogger)
+    .context as (input: Record<string, unknown>) => GraphqlContext;
+
+  it('passes the HTTP request and response to resolvers', () => {
+    const req = { headers: { authorization: 'Bearer token' } };
+    const res = {} as Response;
+    expect(context({ req, res })).toEqual({ req, res });
+  });
+
+  it('builds the request from websocket connection params, with the connection requestId', () => {
+    const connectionParams = { Authorization: 'Bearer token', 'X-Request-Id': 'ws-1' };
+    expect(context({ connectionParams, extra: {} })).toEqual({
+      req: { headers: { authorization: 'Bearer token', 'x-request-id': 'ws-1' } },
+      requestId: 'ws-1',
+    });
+  });
+});
 
 function websocketHooks(metrics: Metrics) {
   return graphqlOptions(AppConfig.fromEnv({}), logger as unknown as PinoLogger, metrics)

@@ -1,17 +1,11 @@
 /**
- * GraphQL logging. Keep this file and `graphql/expected-error.filter.ts` IDENTICAL in
- * wallet-core, rates-service and treasury-service.
- *
- * - HTTP operations: the Apollo plugin stores the operation (`query Me`) on the request, so the
- *   access log line names it, and logs resolver errors with the request's `requestId`.
- * - graphql-ws: one `requestId` per websocket connection, taken from `x-request-id` in the
- *   connection params or the upgrade request, else generated. Subscription start/end and errors
- *   are logged with it.
+ * Keep this file and `graphql/expected-error.filter.ts` IDENTICAL in wallet-core, rates-service
+ * and treasury-service.
  */
 import type { ApolloServerPlugin } from '@apollo/server';
 import { unwrapResolverError } from '@apollo/server/errors';
 import { HttpException } from '@nestjs/common';
-import type { GraphQLError } from 'graphql';
+import type { ExecutionArgs, GraphQLError } from 'graphql';
 import type { PinoLogger } from 'nestjs-pino';
 import type { Logger } from 'pino';
 import { isExpectedGraphqlError } from '../graphql/expected-error.filter.js';
@@ -58,7 +52,7 @@ function httpStatusOf(thrown: unknown): number | undefined {
   return thrown instanceof HttpException ? thrown.getStatus() : undefined;
 }
 
-function isClientStatus(status: number | undefined): boolean {
+function isClientStatus(status: number | undefined): status is number {
   return status !== undefined && status >= 400 && status < 500;
 }
 
@@ -140,12 +134,7 @@ export function wsRequestId(ctx: WsContext): string {
   return extra.requestId;
 }
 
-/**
- * graphql-ws results bypass the Apollo plugin, so they are logged here at the same levels: expected
- * errors at warn, other server failures at error with the stack. `serverOriginal` returns the error
- * the server threw (the one formatError classifies), or `undefined` for a client error, logged only
- * if expected. Nest 4xx exceptions are not logged; resolver exceptions are also logged by Nest.
- */
+/** graphql-ws results bypass Apollo's logging plugin. */
 export function logWsErrors(
   logger: PinoLogger,
   ctx: WsContext,
@@ -156,21 +145,62 @@ export function logWsErrors(
     const thrown = serverOriginal(error);
     const original = thrown ?? error;
     const expected = isExpectedGraphqlError(original);
-    if (!expected && (thrown === undefined || isClientStatus(httpStatusOf(thrown)))) continue;
+    if (!expected && thrown === undefined) continue;
+    const status = httpStatusOf(thrown);
+    const refusal = isClientStatus(status) ? `HTTP_${status}` : undefined;
     const fields = {
       requestId: wsRequestId(ctx),
-      // The code the client gets: an unexpected error is masked, whatever its wrapper carries.
-      code: expected ? original.extensions.code : 'INTERNAL_SERVER_ERROR',
+      // An unexpected error is masked for the client, whatever its wrapper carries.
+      code: expected ? original.extensions.code : (refusal ?? 'INTERNAL_SERVER_ERROR'),
       path: error.path?.join('.'),
     };
     const msg = `GraphQL error: ${withoutValue(error.message)}`;
-    if (expected) logger.warn(fields, msg);
+    if (expected || refusal) logger.warn(fields, msg);
     else
       logger.error(
         { ...fields, err: loggableError(original instanceof Error ? original : error) },
         msg,
       );
   }
+}
+
+/**
+ * graphql-ws consumes subscription iterators outside execution, so both execution and iterator
+ * methods need the connection's logging context.
+ */
+export function inWsLoggingContext<T>(
+  logger: PinoLogger,
+  run: (args: ExecutionArgs) => T,
+): (args: ExecutionArgs) => T {
+  return (args) => {
+    const { requestId } = (args.contextValue ?? {}) as { requestId?: string };
+    const inContext = <R>(fn: () => R): R => logger.runInContext(fn, { bindings: { requestId } });
+    const result = inContext(() => run(args));
+    const bind = (value: unknown): unknown =>
+      isAsyncIterable(value) ? boundIterator(value[Symbol.asyncIterator](), inContext) : value;
+    return (result instanceof Promise ? result.then(bind) : bind(result)) as T;
+  };
+}
+
+function isAsyncIterable(value: unknown): value is AsyncIterable<unknown> {
+  return typeof (value as AsyncIterable<unknown> | null)?.[Symbol.asyncIterator] === 'function';
+}
+
+/** `return` and `throw` only if the iterator has them: graphql-ws calls `return` only then. */
+function boundIterator<T>(
+  iterator: AsyncIterator<T>,
+  inContext: <R>(fn: () => R) => R,
+): AsyncIterableIterator<T> {
+  const stop = iterator.return?.bind(iterator);
+  const fail = iterator.throw?.bind(iterator);
+  return {
+    next: (...value: [] | [unknown]) => inContext(() => iterator.next(...value)),
+    ...(stop && { return: (value?: unknown) => inContext(() => stop(value)) }),
+    ...(fail && { throw: (error?: unknown) => inContext(() => fail(error)) }),
+    [Symbol.asyncIterator]() {
+      return this;
+    },
+  };
 }
 
 function operationOf(payload: WsSubscribePayload): string {
