@@ -33,6 +33,7 @@ import {
   formatProtocolErrors,
   serverProtocolOriginal,
 } from './format-error.js';
+import { maxDepthRule } from './max-depth.rule.js';
 
 /** Path of the committed GraphQL contract. Other repositories consume this file. */
 export const SCHEMA_FILE = join(process.cwd(), 'schema.graphql');
@@ -145,6 +146,9 @@ export function graphqlOptions(
     },
     // Names the operation in the access log and logs resolver errors with the requestId.
     plugins: [graphqlLoggingPlugin(), ...(metrics ? [graphqlMetricsPlugin(metrics)] : [])],
+    // A document over the token limit is not parsed at all (400 GRAPHQL_PARSE_FAILED).
+    parseOptions: { maxTokens: config.graphql.maxTokens },
+    validationRules: [maxDepthRule(config.graphql.maxDepth)],
     // Unexpected errors reach the client as a bare INTERNAL_SERVER_ERROR (no internals).
     formatError,
     // graphql-ws supplies connectionParams and extra rather than an HTTP req.

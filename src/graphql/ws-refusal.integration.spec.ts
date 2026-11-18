@@ -12,6 +12,7 @@ import { InjectPinoLogger, LoggerModule, PinoLogger } from 'nestjs-pino';
 import WebSocket from 'ws';
 import { AUTH_STRATEGIES } from '../auth/auth-strategy.js';
 import { AuthGuard } from '../auth/auth.guard.js';
+import { Authenticator } from '../auth/authenticator.js';
 import { JwtAuthStrategy } from '../auth/jwt-auth.strategy.js';
 import { MeResolver } from '../auth/me.resolver.js';
 import { AppConfig } from '../config/app-config.js';
@@ -134,6 +135,7 @@ describe('WebSocket refusals (E1-18)', () => {
           inject: [JwtAuthStrategy],
           useFactory: (jwt: JwtAuthStrategy) => [jwt],
         },
+        Authenticator,
         { provide: APP_GUARD, useClass: AuthGuard },
         { provide: APP_GUARD, useClass: PermissionGuard },
       ],

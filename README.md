@@ -98,6 +98,8 @@ See `.env.example`.
 | `THROTTLE_TTL_SECONDS`     | `60`                                                             | Length of the rate-limit window, in seconds                                          |
 | `THROTTLE_LIMIT_ANONYMOUS` | `120`                                                            | Requests per window without a token (counted per client IP)                          |
 | `THROTTLE_LIMIT_USER`      | `600`                                                            | Requests per window for a logged-in user or staff member (counted per id)            |
+| `GRAPHQL_MAX_TOKENS`       | `1000`                                                           | Largest GraphQL document, in tokens (see "Document limits")                          |
+| `GRAPHQL_MAX_DEPTH`        | `15`                                                             | Deepest allowed field nesting in a GraphQL document                                  |
 
 ## GraphQL contract
 
@@ -134,9 +136,16 @@ The implementation is in `src/server-time/`; the e2e test `test/server-time.e2e-
 
 ## Rate limits
 
-Every request that reaches a resolver or a controller is counted against a key, and once the limit is reached
-further requests are refused until the window ends. The global guard lives in `src/throttling` (`@nestjs/throttler`
-with our own Redis storage). It runs after `AuthGuard`, so it knows who the caller is.
+Every HTTP request is counted against a key, and once the limit is reached further requests are refused until the
+window ends. The code lives in `src/throttling` (`@nestjs/throttler` with our own Redis storage):
+
+- **GraphQL:** a middleware counts every HTTP request to `/graphql` before Apollo sees it. So documents that cannot be
+  parsed or fail validation, introspection (`__schema`, `__type`) and requests refused by `AuthGuard` (401) or
+  `PermissionGuard` (403) are counted too. The middleware verifies the token itself (once: `AuthGuard` reuses the
+  result); an invalid or expired token counts as anonymous, by IP.
+- **REST:** a global guard that runs after `AuthGuard`, so it knows who the caller is.
+
+Both use the same counters and keys.
 
 | Caller          | Key              | Default limit per window |
 | --------------- | ---------------- | ------------------------ |
@@ -157,12 +166,11 @@ there (the mentor does it in Dokploy) and redeploy.
   The service name in the key makes each service count on its own, although all backends share one Redis.
 - **Client IP.** Express trusts one proxy hop (`trust proxy = 1`, `src/configure-app.ts`, because Traefik is the
   only proxy), so the IP is the last `X-Forwarded-For` entry. A client cannot invent a new IP by adding entries.
-- **Not counted:** `GET /health` (the controller is marked `@SkipThrottle()`) and everything that arrives over the
-  WebSocket (subscriptions). The GraphQL query `health` is counted like any other query. `GET /metrics` is served
+- **Not counted:** `GET /health` (the controller is marked `@SkipThrottle()`), CORS preflight (`OPTIONS`) and
+  everything that arrives over the WebSocket (subscriptions). The GraphQL query `health` is counted like any other query. `GET /metrics` is served
   on its own port (see [Metrics](#metrics)) and never reaches the guard.
-- **Known limits (follow-ups):** a guard runs only when a resolver or controller is about to be called, so these
-  requests are not counted: refused by `AuthGuard` (401) or `PermissionGuard` (403), GraphQL introspection
-  (`__schema`, `__type`), and GraphQL documents that cannot be parsed or fail validation. Server-to-server calls are
+- **Known limits (follow-ups):** REST requests refused by `AuthGuard` (401) or `PermissionGuard` (403) are not counted,
+  because the REST guard runs only after them. Server-to-server calls are
   not exempt: when wallet-core starts calling this service (it does not yet), its calls are counted like any other
   caller's (`ip:<wallet-core IP>` without a token, `user:` / `staff:` if it forwards one). An exemption belongs
   with the real rates client.
@@ -172,6 +180,21 @@ there (the mentor does it in Dokploy) and redeploy.
   logged at most once a minute. The `X-RateLimit-*` headers then show a full budget and mean nothing.
 - An allowed response carries `X-RateLimit-Limit`, `X-RateLimit-Remaining` and `X-RateLimit-Reset` (seconds left);
   a refused one carries `Retry-After`.
+
+### Document limits
+
+A GraphQL document is checked before it runs, so a huge or deeply nested one costs little:
+
+- **Body size:** Nest's default JSON limit of 100 kb is kept; a larger body is refused with HTTP 413 before GraphQL.
+- **`GRAPHQL_MAX_TOKENS`** (default 1000): parsing stops once the document has more tokens. Answer: HTTP 400, code
+  `GRAPHQL_PARSE_FAILED`, message `Syntax Error: Document contains more that 1000 tokens. Parsing aborted.`
+  (the typo is graphql-js's own).
+- **`GRAPHQL_MAX_DEPTH`** (default 15): a leaf field counts 1 and a field with a selection set counts 1 plus its deepest
+  selection; fragments add nothing, introspection fields are not exempt. The standard introspection query has depth
+  15, frontends use at most 3. Answer: HTTP 400, code `GRAPHQL_VALIDATION_FAILED`, message
+  `Query depth 16 exceeds the limit of 15`.
+
+Both are counted by the rate limit like any other request.
 
 ### Error format (the contract for frontends)
 
