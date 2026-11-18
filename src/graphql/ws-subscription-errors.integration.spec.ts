@@ -29,18 +29,12 @@ import { Metrics } from '../metrics/metrics.js';
 import { GraphqlErrorsModule } from './graphql-errors.module.js';
 import { graphqlOptions } from './graphql.config.js';
 
-/**
- * Errors thrown while a running subscription resolves an event, over a real graphql-ws connection
- * with the production GraphQL logger and metrics. The only real subscription, `serverTime`, cannot
- * fail on an event, so the probe resolver stands in for one; `serverTime` is checked for no records.
- */
+/** A probe resolver, because `serverTime`, the only real subscription, cannot fail on an event. */
 
 const SERVICE = 'rates-service';
 const config = AppConfig.fromEnv({ NODE_ENV: 'test' });
-/** Stands for SQL, an e-mail or another internal that must never reach the client. */
 const SECRET = 'artem@test.com';
 
-/** What `resolve` does with one event, by name. */
 const OUTCOMES: Record<string, () => number> = {
   ok: () => 1,
   crash: () => {
@@ -95,7 +89,6 @@ class ProbeResolver {
     return true;
   }
 
-  /** One event per item of `script`; `resolve` turns each into its outcome. */
   @Subscription(() => Int, {
     nullable: true,
     resolve: (event: { outcome: string }) => OUTCOMES[event.outcome](),
@@ -111,7 +104,6 @@ class ProbeResolver {
     })();
   }
 
-  /** Both fields of one event fail: two errors in one result. */
   @Subscription(() => Pair, { nullable: true, resolve: (pair: Pair) => pair })
   pairs(): AsyncGenerator<Pair> {
     return (async function* () {
@@ -127,7 +119,6 @@ class ProbeResolver {
     })();
   }
 
-  /** The source itself fails after one event (graphql-ws `onError`, not `onNext`). */
   @Subscription(() => Int, { resolve: (event: number) => event })
   brokenSource(): AsyncGenerator<number> {
     return (async function* () {
@@ -137,7 +128,6 @@ class ProbeResolver {
     })();
   }
 
-  /** Crashes on every event until the client goes away. */
   @Subscription(() => Int, {
     nullable: true,
     resolve: () => OUTCOMES.crash(),
@@ -167,7 +157,6 @@ interface PinoLine {
   code?: string;
   path?: string;
   err?: { type?: string; message?: string; stack?: string };
-  /** The line as pino wrote it. */
   raw: string;
 }
 
@@ -176,7 +165,6 @@ const nestErrors: unknown[][] = [];
 
 type WsResult = FormattedExecutionResult<Record<string, unknown>, unknown>;
 
-/** The GraphQL error records (one per error), the subject of these tests. */
 const errorRecords = (logs: PinoLine[]) =>
   logs.filter((line) => line.context === 'GraphQL' && ['warn', 'error'].includes(line.level));
 
@@ -245,7 +233,6 @@ describe(`errors in a running subscription (${SERVICE})`, () => {
       connectionParams: requestId ? { 'x-request-id': requestId } : {},
     });
 
-  /** Runs one operation on `client` to its end; returns what the client got. */
   function collect(client: Client, query: string, operationName?: string) {
     return new Promise<{ results: WsResult[]; failure: unknown }>((resolve) => {
       const results: WsResult[] = [];
@@ -260,7 +247,6 @@ describe(`errors in a running subscription (${SERVICE})`, () => {
     });
   }
 
-  /** One operation over its own connection; returns what the client got and the new log lines. */
   async function runWs(query: string, requestId?: string) {
     const before = lines.length;
     const nestBefore = nestErrors.length;
@@ -307,7 +293,6 @@ describe(`errors in a running subscription (${SERVICE})`, () => {
           }),
         }),
       ]);
-      // No second record from Nest or anywhere else.
       expect(logs.filter((line) => line.level === 'error')).toHaveLength(1);
       expect(nest).toEqual([]);
     });
@@ -478,7 +463,6 @@ describe(`errors in a running subscription (${SERVICE})`, () => {
     ]);
     expect(results[0].errors).toHaveLength(2);
     expect(JSON.stringify(results)).not.toContain(SECRET);
-    // The metric counts results by code, not errors (the same over HTTP).
     expect(await errorCount(operation, 'INTERNAL_SERVER_ERROR')).toBe(before + 1);
   });
 
@@ -595,10 +579,6 @@ describe(`errors in a running subscription (${SERVICE})`, () => {
     expect(startedId('First')).not.toBe(startedId('Second'));
   });
 
-  /**
-   * Ends a crashing subscription right after its first error, by unsubscribing or by closing the
-   * connection, and returns the lines written until well after its source stopped.
-   */
   async function endAfterFirstError(requestId: string, end: 'unsubscribe' | 'disconnect') {
     const before = lines.length;
     const client = connect(requestId);
@@ -647,7 +627,6 @@ describe(`errors in a running subscription (${SERVICE})`, () => {
           msg: expect.stringContaining('Duplicate entry'),
         });
       }
-      // Ending the subscription is not an error: no record from onError, the socket or Nest.
       expect(logs.filter((line) => line.level === 'error')).toHaveLength(records.length);
       expect(afterStop.filter((line) => line.level === 'error' || line.level === 'warn')).toEqual(
         [],
