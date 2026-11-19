@@ -3,6 +3,7 @@ import { APP_GUARD } from '@nestjs/core';
 import { JwtModule } from '@nestjs/jwt';
 import { AUTH_STRATEGIES, type AuthStrategy } from './auth-strategy.js';
 import { AuthGuard } from './auth.guard.js';
+import { Authenticator } from './authenticator.js';
 import { JwtAuthStrategy } from './jwt-auth.strategy.js';
 import { MeResolver } from './me.resolver.js';
 import { PermissionGuard } from '../permissions/permission.guard.js';
@@ -23,11 +24,12 @@ import { PermissionGuard } from '../permissions/permission.guard.js';
       inject: [JwtAuthStrategy],
       useFactory: (jwt: JwtAuthStrategy): AuthStrategy[] => [jwt],
     },
+    Authenticator,
     // Order matters: authenticate first, then check permissions.
     { provide: APP_GUARD, useClass: AuthGuard },
     { provide: APP_GUARD, useClass: PermissionGuard },
     MeResolver,
   ],
-  exports: [AUTH_STRATEGIES],
+  exports: [AUTH_STRATEGIES, Authenticator],
 })
 export class AuthModule {}

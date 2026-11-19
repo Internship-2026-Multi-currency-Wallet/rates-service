@@ -40,6 +40,7 @@ export class AppConfig {
     secret: string;
   };
   readonly throttle: { ttlSeconds: number; limitAnonymous: number; limitUser: number };
+  readonly graphql: { maxTokens: number; maxDepth: number };
 
   constructor(env: Env) {
     this.version = env.APP_VERSION ?? readPackageVersion();
@@ -64,6 +65,7 @@ export class AppConfig {
       limitAnonymous: env.THROTTLE_LIMIT_ANONYMOUS,
       limitUser: env.THROTTLE_LIMIT_USER,
     };
+    this.graphql = { maxTokens: env.GRAPHQL_MAX_TOKENS, maxDepth: env.GRAPHQL_MAX_DEPTH };
   }
 
   get isProduction(): boolean {

@@ -74,6 +74,19 @@ describe('validateEnv', () => {
   });
 });
 
+describe('validateEnv: GraphQL document limits', () => {
+  it('defaults to 1000 tokens and depth 15', () => {
+    expect(validateEnv(required)).toMatchObject({
+      GRAPHQL_MAX_TOKENS: 1000,
+      GRAPHQL_MAX_DEPTH: 15,
+    });
+  });
+
+  it.each(['GRAPHQL_MAX_TOKENS', 'GRAPHQL_MAX_DEPTH'])('rejects %s=0', (name) => {
+    expect(() => validateEnv({ ...required, [name]: '0' })).toThrow(name);
+  });
+});
+
 describe('validateEnv: throttling', () => {
   const NAMES = [
     'THROTTLE_TTL_SECONDS',

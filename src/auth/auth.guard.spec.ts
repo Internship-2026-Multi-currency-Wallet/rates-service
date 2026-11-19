@@ -6,6 +6,7 @@ import { PinoLogger } from 'nestjs-pino';
 import { AppConfig } from '../config/app-config.js';
 import type { AuthStrategy } from './auth-strategy.js';
 import { AuthGuard } from './auth.guard.js';
+import { Authenticator } from './authenticator.js';
 import { JwtAuthStrategy } from './jwt-auth.strategy.js';
 import { Public } from './public.decorator.js';
 import type { RequestLike } from './request-context.js';
@@ -42,7 +43,7 @@ describe('AuthGuard', () => {
     AppConfig.fromEnv({ JWT_SECRET: SECRET }),
     new PinoLogger({ pinoHttp: { level: 'silent' } }),
   );
-  const guard = new AuthGuard(reflector, [jwt]);
+  const guard = new AuthGuard(reflector, new Authenticator([jwt]));
 
   const token = (expiresIn = 900): string =>
     jwtService.sign(
@@ -112,7 +113,7 @@ describe('AuthGuard', () => {
           ? { id: 'o1', kind: UserKind.CLIENT, permissions: [], strategy: 'other' }
           : null,
     };
-    const chained = new AuthGuard(reflector, [jwt, other]);
+    const chained = new AuthGuard(reflector, new Authenticator([jwt, other]));
 
     const jwtRequest = bearer(token());
     await chained.canActivate(context('closed', jwtRequest));
