@@ -19,6 +19,7 @@ import {
   logWsErrors,
   subscriptionLoggingHooks,
   type WsContext,
+  type WsSubscribePayload,
   wsRequestId,
 } from '../logging/graphql-logging.js';
 import { type Metrics, UNKNOWN_OPERATION } from '../metrics/metrics.js';
@@ -74,11 +75,11 @@ export function graphqlOptions(
   const countedSockets = new WeakSet<object>();
   const onProtocolError = (
     ctx: WsContext,
-    _id: string,
-    payload: { query?: string; operationName?: string | null },
+    id: string,
+    payload: WsSubscribePayload,
     errors: readonly GraphQLError[],
   ): GraphQLFormattedError[] | undefined => {
-    logWsErrors(logger, ctx, errors, serverProtocolOriginal);
+    logWsErrors(logger, ctx, { id, payload }, errors, serverProtocolOriginal);
     const formatted = formatProtocolErrors(errors);
     const fromServer = formatted.filter((item) => !item.fromClient).map((item) => item.error);
     if (metrics) {
@@ -119,9 +120,9 @@ export function graphqlOptions(
           if (countedSockets.delete(ctx)) metrics?.graphqlWsConnections.dec();
         },
         // Apollo's formatError does not see websocket results: mask them the same way.
-        onNext: (ctx, _id, _payload, args, result) => {
+        onNext: (ctx, id, payload, args, result) => {
           // Execution errors carry a path; pathless ones are the client's variable errors.
-          logWsErrors(logger, ctx, result.errors, (error) =>
+          logWsErrors(logger, ctx, { id, payload }, result.errors, (error) =>
             error.path !== undefined ? unwrapResolverError(error) : undefined,
           );
           const formatted = formatExecutionResult(result);
